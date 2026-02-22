@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "dex-neutral-bot"
+version = "0.1.0"
+description = "Delta Neutral Trading Bot for DEXs"
+authors = ["Gemini CLI"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+textual = "^0.40.0"
+aiohttp = "^3.9.0"
+pydantic = "^2.5.0"
+python-dotenv = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
