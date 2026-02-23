@@ -3,6 +3,7 @@ from textual.containers import Container, Vertical, Horizontal, ScrollableContai
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button
 from src.core.config import AccountConfig, ExchangeConfig
 from src.core.bot_manager import BotManager, BotInstance, StrategyState
+from src.core.i18n import i18n
 from decimal import Decimal
 import asyncio
 from datetime import datetime
@@ -26,7 +27,6 @@ class StatusPill(Static):
         self.value = value
 
     def render(self):
-        # Use simple string if no style, or ensure tags match
         return f"{self.label}: {self.value}"
 
     def update_value(self, label, value, style=None):
@@ -41,32 +41,32 @@ class DashboardTab(Vertical):
     """Main view showing all accounts at a glance."""
     def compose(self) -> ComposeResult:
         with Horizontal(id="stats-row"):
-            yield StatusPill("TOTAL PnL", id="stat-pnl")
-            yield StatusPill("ACTIVE BOTS", id="stat-bots")
+            yield StatusPill(i18n.t("total_pnl"), id="stat-pnl")
+            yield StatusPill(i18n.t("active_bots"), id="stat-bots")
         
-        yield Label("Live Bots", classes="section-title")
+        yield Label(i18n.t("live_bots"), classes="section-title")
         yield DataTable(id="bots-table")
         
-        yield Label("Global Feed", classes="section-title")
+        yield Label(i18n.t("global_feed"), classes="section-title")
         yield RichLog(id="feed-log", markup=True, wrap=True)
 
 class AccountsTab(ScrollableContainer):
     """Manage Accounts (List + Add/Remove)."""
     def compose(self) -> ComposeResult:
-        yield Label("Configured Accounts", classes="section-title")
+        yield Label(i18n.t("configured_accounts"), classes="section-title")
         yield DataTable(id="accounts-config-table")
         
         with Horizontal(classes="controls"):
-            yield Button("Add New Account", variant="primary", id="btn-add-account")
-            yield Button("Remove Selected", variant="error", id="btn-remove-account", disabled=True)
+            yield Button(i18n.t("add_account"), variant="primary", id="btn-add-account")
+            yield Button(i18n.t("remove_selected"), variant="error", id="btn-remove-account", disabled=True)
 
 class SettingsTab(ScrollableContainer):
     """Global Settings."""
     def compose(self) -> ComposeResult:
-        yield Label("Global Settings", classes="section-title")
-        yield Label("Refresh Rate (ms)")
+        yield Label(i18n.t("settings"), classes="section-title")
+        yield Label(i18n.t("refresh_rate"))
         yield Input(placeholder="1000", value="1000")
-        yield Button("Save", variant="primary")
+        yield Button(i18n.t("save"), variant="primary")
 
 
 class TradingBotApp(App):
@@ -87,24 +87,34 @@ class TradingBotApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent():
-            with TabPane("Dashboard", id="tab-dashboard"):
+            with TabPane(i18n.t("dashboard"), id="tab-dashboard"):
                 yield DashboardTab()
-            with TabPane("Accounts", id="tab-accounts"):
+            with TabPane(i18n.t("accounts"), id="tab-accounts"):
                 yield AccountsTab()
-            with TabPane("Settings", id="tab-settings"):
+            with TabPane(i18n.t("settings"), id="tab-settings"):
                 yield SettingsTab()
         yield Footer()
 
     async def on_mount(self) -> None:
         self.log_widget = self.query_one("#feed-log", RichLog)
-        self.log_widget.write("[bold green]System Initialized.[/] Loaded accounts.")
+        self.log_widget.write(i18n.t("system_init"))
         
         # Setup Tables
         table = self.query_one("#bots-table", DataTable)
-        table.add_columns("Account", "Status", "PnL (Unrealized)", "Positions")
+        table.add_columns(
+            i18n.t("account"), 
+            i18n.t("status"), 
+            i18n.t("pnl_unrealized"), 
+            i18n.t("positions")
+        )
         
         config_table = self.query_one("#accounts-config-table", DataTable)
-        config_table.add_columns("Name", "Target Size", "Pacifica Key", "Variational Key")
+        config_table.add_columns(
+            i18n.t("name"), 
+            i18n.t("target_size"), 
+            "Pacifica Key", 
+            "Variational Key"
+        )
         config_table.cursor_type = "row"
 
         # Start Manager
@@ -137,10 +147,10 @@ class TradingBotApp(App):
 
                 # 2. Update Stats
                 pnl_style = "bold green" if total_pnl >= 0 else "bold red"
-                self.query_one("#stat-pnl", StatusPill).update_value("TOTAL PnL", f"${total_pnl:.2f}", pnl_style)
-                self.query_one("#stat-bots", StatusPill).update_value("ACTIVE BOTS", str(active_count))
+                self.query_one("#stat-pnl", StatusPill).update_value(i18n.t("total_pnl"), f"${total_pnl:.2f}", pnl_style)
+                self.query_one("#stat-bots", StatusPill).update_value(i18n.t("active_bots"), str(active_count))
 
-                # 3. Update Config Table (only if in Accounts tab to save CPU)
+                # 3. Update Config Table
                 config_table = self.query_one("#accounts-config-table", DataTable)
                 if config_table.row_count != len(self.manager.config.accounts):
                     config_table.clear()
@@ -154,8 +164,11 @@ class TradingBotApp(App):
                             f"***{vk}",
                             key=str(idx)
                         )
+                
+                # Log state changes nicely with translated messages
+                # (Logic would normally be in the bot_instance update loop)
             except Exception:
-                pass # Prevent UI loop from dying if widgets are transient
+                pass
 
             await asyncio.sleep(1.0)
 
@@ -163,14 +176,15 @@ class TradingBotApp(App):
         if event.button.id == "btn-add-account":
             new_acc = AccountConfig(name=f"Account {len(self.manager.config.accounts)+1}")
             self.manager.add_account(new_acc)
-            self.log_widget.write(f"[blue]Added new account: {new_acc.name}[/]")
+            # Use English as internal key for now
+            self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
             
         elif event.button.id == "btn-remove-account":
             table = self.query_one("#accounts-config-table", DataTable)
             if table.cursor_row is not None:
                 idx = table.cursor_row
                 self.manager.remove_account(idx)
-                self.log_widget.write(f"[red]Removed account[/]")
+                self.log_widget.write(f"[red]{i18n.t('remove_selected')}[/]")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
         if event.data_table.id == "accounts-config-table":
