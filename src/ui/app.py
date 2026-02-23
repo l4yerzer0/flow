@@ -1,128 +1,88 @@
 from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button
-from textual.reactive import reactive
-from src.exchanges.mock import MockExchange
-from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
+from src.core.config import AccountConfig, ExchangeConfig
+from src.core.bot_manager import BotManager, BotInstance, StrategyState
 from decimal import Decimal
 import asyncio
 from datetime import datetime
 
-# --- Reusable Components ---
+# --- Reusable UI ---
 
-class StatCard(Static):
-    """A styled card for displaying a single metric."""
+class StatusPill(Static):
     DEFAULT_CSS = """
-    StatCard {
-        width: 1fr;
-        height: 3;
-        background: $surface;
-        color: $text;
-        border: solid $primary;
+    StatusPill {
+        width: auto;
+        height: 1;
         padding: 0 1;
         margin: 0 1;
-        content-align: center middle;
+        background: $surface;
+        color: $text-muted;
     }
-    .label { color: $text-muted; }
-    .value { text-style: bold; color: $accent; }
     """
-    
     def __init__(self, label: str, value: str = "--", **kwargs):
         super().__init__(**kwargs)
         self.label = label
         self.value = value
 
     def render(self):
-        return f"[{self.label}] {self.value}"
+        # Use simple string if no style, or ensure tags match
+        return f"{self.label}: {self.value}"
 
-    def update_value(self, new_value):
-        self.value = new_value
+    def update_value(self, label, value, style=None):
+        if style:
+            self.value = f"[{style}]{value}[/]"
+        else:
+            self.value = str(value)
+        self.label = label
         self.refresh()
 
-# --- Tab Contents ---
-
 class DashboardTab(Vertical):
-    """The main dashboard view."""
+    """Main view showing all accounts at a glance."""
     def compose(self) -> ComposeResult:
         with Horizontal(id="stats-row"):
-            yield StatCard("TOTAL PnL", "$0.00", id="card-pnl")
-            yield StatCard("STATUS", "IDLE", id="card-status")
-            yield StatCard("ACTIVE POS", "0", id="card-pos")
-
-        yield Label("Activity Feed", classes="section-title")
+            yield StatusPill("TOTAL PnL", id="stat-pnl")
+            yield StatusPill("ACTIVE BOTS", id="stat-bots")
+        
+        yield Label("Live Bots", classes="section-title")
+        yield DataTable(id="bots-table")
+        
+        yield Label("Global Feed", classes="section-title")
         yield RichLog(id="feed-log", markup=True, wrap=True)
 
-class AccountsTab(Vertical):
-    """Table of connected accounts."""
+class AccountsTab(ScrollableContainer):
+    """Manage Accounts (List + Add/Remove)."""
     def compose(self) -> ComposeResult:
-        yield DataTable()
-
-    def on_mount(self):
-        table = self.query_one(DataTable)
-        table.add_columns("Exchange", "Status", "Balance (USDC)", "Ping")
-        # Initial Mock Data
-        table.add_row("Pacifica", "🟢 Connected", "$10,000.00", "45ms", key="pacifica")
-        table.add_row("Variational", "🟢 Connected", "$10,000.00", "32ms", key="variational")
+        yield Label("Configured Accounts", classes="section-title")
+        yield DataTable(id="accounts-config-table")
+        
+        with Horizontal(classes="controls"):
+            yield Button("Add New Account", variant="primary", id="btn-add-account")
+            yield Button("Remove Selected", variant="error", id="btn-remove-account", disabled=True)
 
 class SettingsTab(ScrollableContainer):
-    """Configuration form."""
+    """Global Settings."""
     def compose(self) -> ComposeResult:
-        yield Label("Strategy Settings", classes="section-title")
-        yield Label("Target Position Size (USD)")
+        yield Label("Global Settings", classes="section-title")
+        yield Label("Refresh Rate (ms)")
         yield Input(placeholder="1000", value="1000")
-        
-        yield Label("Stop Loss (%)")
-        yield Input(placeholder="5.0", value="5.0")
-        
-        yield Label("API Keys (Pacifica)", classes="section-title")
-        yield Input(placeholder="API Key", password=True)
-        yield Input(placeholder="API Secret", password=True)
+        yield Button("Save", variant="primary")
 
-        yield Label("API Keys (Variational)", classes="section-title")
-        yield Input(placeholder="API Key", password=True)
-        yield Input(placeholder="API Secret", password=True)
-        
-        yield Button("Save Configuration", variant="primary", id="btn-save")
-
-# --- Main App ---
 
 class TradingBotApp(App):
     CSS = """
     Screen { background: $surface-darken-1; }
-    
-    #stats-row {
-        height: 5;
-        margin: 1 0;
-    }
-    
-    .section-title {
-        margin: 1 0;
-        text-style: bold;
-        color: $secondary;
-    }
-
-    RichLog {
-        background: $surface;
-        border: solid $primary;
-        height: 1fr;
-    }
-
-    DataTable {
-        height: 1fr;
-        border: solid $primary;
-    }
-
-    Input { margin-bottom: 1; }
+    #stats-row { height: 3; margin: 1 0; border-bottom: solid $primary; }
+    .section-title { margin: 1 0; text-style: bold; color: $secondary; }
+    RichLog { height: 1fr; border: solid $primary; background: $surface; }
+    DataTable { height: auto; min-height: 10; border: solid $primary; }
+    .controls { height: auto; margin-top: 1; align: center middle; }
+    Button { margin-right: 2; }
     """
-
-    TITLE = "Flow Bot"
-    SUB_TITLE = "Delta Neutral Strategy"
 
     def __init__(self):
         super().__init__()
-        self.ex_a = MockExchange("Pacifica")
-        self.ex_b = MockExchange("Variational")
-        self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
+        self.manager = BotManager()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -137,52 +97,84 @@ class TradingBotApp(App):
 
     async def on_mount(self) -> None:
         self.log_widget = self.query_one("#feed-log", RichLog)
-        self.log_widget.write("[bold green]System Initialized.[/] Waiting for strategy...")
+        self.log_widget.write("[bold green]System Initialized.[/] Loaded accounts.")
         
-        # Start loops
-        asyncio.create_task(self.strategy.run_loop())
-        asyncio.create_task(self.update_dashboard())
-
-    async def update_dashboard(self):
-        """Updates dashboard stats and bridges logs."""
-        card_pnl = self.query_one("#card-pnl", StatCard)
-        card_status = self.query_one("#card-status", StatCard)
-        card_pos = self.query_one("#card-pos", StatCard)
+        # Setup Tables
+        table = self.query_one("#bots-table", DataTable)
+        table.add_columns("Account", "Status", "PnL (Unrealized)", "Positions")
         
-        last_state = self.strategy.state
+        config_table = self.query_one("#accounts-config-table", DataTable)
+        config_table.add_columns("Name", "Target Size", "Pacifica Key", "Variational Key")
+        config_table.cursor_type = "row"
 
+        # Start Manager
+        await self.manager.start_all()
+        
+        # Start UI Loop
+        asyncio.create_task(self.update_loop())
+
+    async def update_loop(self):
         while True:
-            # Update Cards
-            pnl = self.strategy.current_pnl
-            card_pnl.update_value(f"${pnl:.2f}")
-            card_status.update_value(self.strategy.state.value)
-            
-            # Simple Logic for mock positions count
-            pos_count = "2" if self.strategy.state == StrategyState.HEDGED else "0"
-            card_pos.update_value(pos_count)
-
-            # Log State Changes
-            if self.strategy.state != last_state:
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                if self.strategy.state == StrategyState.OPENING:
-                    self.log_widget.write(f"[{timestamp}] [bold blue]Scanning market...[/]")
-                elif self.strategy.state == StrategyState.HEDGED:
-                    self.log_widget.write(f"[{timestamp}] [bold green]✔ Positions OPENED. Hedging...[/]")
-                elif self.strategy.state == StrategyState.CLOSING:
-                     self.log_widget.write(f"[{timestamp}] [yellow]Closing positions...[/]")
-                last_state = self.strategy.state
-            
-            # Update Account Table (if visible)
             try:
-                table = self.query_one(DataTable)
-                bal_a = await self.ex_a.get_balance()
-                bal_b = await self.ex_b.get_balance()
-                table.update_cell("pacifica", "Balance (USDC)", f"${bal_a:.2f}")
-                table.update_cell("variational", "Balance (USDC)", f"${bal_b:.2f}")
-            except:
-                pass # Table might not be mounted if tab isn't active (or different structure)
+                # 1. Update Dashboard Table
+                table = self.query_one("#bots-table", DataTable)
+                total_pnl = Decimal("0.0")
+                active_count = 0
+                
+                table.clear()
+                for bot in self.manager.bots:
+                    status_style = "green" if bot.strategy.state == StrategyState.HEDGED else "white"
+                    pnl = bot.strategy.current_pnl
+                    total_pnl += pnl
+                    if bot.running: active_count += 1
+                    
+                    table.add_row(
+                        bot.config.name,
+                        f"[{status_style}]{bot.strategy.state.value}[/]",
+                        f"${pnl:.2f}",
+                        "2" if bot.strategy.state == StrategyState.HEDGED else "0"
+                    )
 
-            await asyncio.sleep(0.5)
+                # 2. Update Stats
+                pnl_style = "bold green" if total_pnl >= 0 else "bold red"
+                self.query_one("#stat-pnl", StatusPill).update_value("TOTAL PnL", f"${total_pnl:.2f}", pnl_style)
+                self.query_one("#stat-bots", StatusPill).update_value("ACTIVE BOTS", str(active_count))
+
+                # 3. Update Config Table (only if in Accounts tab to save CPU)
+                config_table = self.query_one("#accounts-config-table", DataTable)
+                if config_table.row_count != len(self.manager.config.accounts):
+                    config_table.clear()
+                    for idx, acc in enumerate(self.manager.config.accounts):
+                        pk = acc.pacifica.api_key[-4:] if acc.pacifica.api_key else "None"
+                        vk = acc.variational.api_key[-4:] if acc.variational.api_key else "None"
+                        config_table.add_row(
+                            acc.name, 
+                            str(acc.target_size_usd),
+                            f"***{pk}",
+                            f"***{vk}",
+                            key=str(idx)
+                        )
+            except Exception:
+                pass # Prevent UI loop from dying if widgets are transient
+
+            await asyncio.sleep(1.0)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-add-account":
+            new_acc = AccountConfig(name=f"Account {len(self.manager.config.accounts)+1}")
+            self.manager.add_account(new_acc)
+            self.log_widget.write(f"[blue]Added new account: {new_acc.name}[/]")
+            
+        elif event.button.id == "btn-remove-account":
+            table = self.query_one("#accounts-config-table", DataTable)
+            if table.cursor_row is not None:
+                idx = table.cursor_row
+                self.manager.remove_account(idx)
+                self.log_widget.write(f"[red]Removed account[/]")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        if event.data_table.id == "accounts-config-table":
+            self.query_one("#btn-remove-account").disabled = False
 
 if __name__ == "__main__":
     app = TradingBotApp()

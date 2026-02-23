@@ -1,0 +1,19 @@
+{
+  "accounts": [
+    {
+      "name": "Demo Account",
+      "enabled": true,
+      "pacifica": {
+        "api_key": "",
+        "api_secret": "",
+        "wallet_private_key": null
+      },
+      "variational": {
+        "api_key": "",
+        "api_secret": "",
+        "wallet_private_key": null
+      },
+      "target_size_usd": 1000.0
+    }
+  ]
+}
