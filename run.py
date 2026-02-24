@@ -40,8 +40,8 @@ if __name__ == "__main__":
 
     # 3. Import App (Delayed import so it doesn't fail before installation)
     try:
-        from src.ui.app import TradingBotApp
-        app = TradingBotApp()
+        from src.ui.app import Flow
+        app = Flow()
         app.run()
     except ImportError as e:
         print(f"Critical Error: Failed to import application after dependency check.\n{e}")

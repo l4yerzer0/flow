@@ -69,7 +69,10 @@ class SettingsTab(ScrollableContainer):
         yield Button(i18n.t("save"), variant="primary")
 
 
-class TradingBotApp(App):
+class Flow(App):
+    TITLE = i18n.t("app_title")
+    SUB_TITLE = i18n.t("app_subtitle")
+    
     CSS = """
     Screen { background: $surface-darken-1; }
     #stats-row { height: 3; margin: 1 0; border-bottom: solid $primary; }
@@ -96,6 +99,9 @@ class TradingBotApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Dynamic localization for the built-in command palette
+        self.COMMAND_PALETTE_PLACEHOLDER = i18n.t("placeholder_cmd")
+        
         self.log_widget = self.query_one("#feed-log", RichLog)
         self.log_widget.write(i18n.t("system_init"))
         
@@ -138,9 +144,13 @@ class TradingBotApp(App):
                     total_pnl += pnl
                     if bot.running: active_count += 1
                     
+                    # Translate state using prefixed key
+                    state_key = f"state_{bot.strategy.state.value.lower()}"
+                    translated_state = i18n.t(state_key)
+                    
                     table.add_row(
                         bot.config.name,
-                        f"[{status_style}]{bot.strategy.state.value}[/]",
+                        f"[{status_style}]{translated_state}[/]",
                         f"${pnl:.2f}",
                         "2" if bot.strategy.state == StrategyState.HEDGED else "0"
                     )
@@ -165,8 +175,6 @@ class TradingBotApp(App):
                             key=str(idx)
                         )
                 
-                # Log state changes nicely with translated messages
-                # (Logic would normally be in the bot_instance update loop)
             except Exception:
                 pass
 
@@ -176,7 +184,6 @@ class TradingBotApp(App):
         if event.button.id == "btn-add-account":
             new_acc = AccountConfig(name=f"Account {len(self.manager.config.accounts)+1}")
             self.manager.add_account(new_acc)
-            # Use English as internal key for now
             self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
             
         elif event.button.id == "btn-remove-account":
@@ -191,5 +198,5 @@ class TradingBotApp(App):
             self.query_one("#btn-remove-account").disabled = False
 
 if __name__ == "__main__":
-    app = TradingBotApp()
+    app = Flow()
     app.run()
