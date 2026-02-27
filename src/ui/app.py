@@ -1,6 +1,7 @@
 from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
-from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button
+from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button, Select
+from textual.screen import ModalScreen
 from src.core.config import AccountConfig, ExchangeConfig
 from src.core.bot_manager import BotManager, BotInstance, StrategyState
 from src.core.i18n import i18n
@@ -58,6 +59,7 @@ class AccountsTab(ScrollableContainer):
         
         with Horizontal(classes="controls"):
             yield Button(i18n.t("add_account"), variant="primary", id="btn-add-account")
+            yield Button(i18n.t("edit_selected"), variant="default", id="btn-edit-account", disabled=True)
             yield Button(i18n.t("remove_selected"), variant="error", id="btn-remove-account", disabled=True)
 
 class SettingsTab(ScrollableContainer):
@@ -67,6 +69,149 @@ class SettingsTab(ScrollableContainer):
         yield Label(i18n.t("refresh_rate"))
         yield Input(placeholder="1000", value="1000")
         yield Button(i18n.t("save"), variant="primary")
+
+
+class ExchangeConfigForm(Vertical):
+    """Sub-form for a single exchange configuration."""
+    def __init__(self, label: str, id_prefix: str, initial_config: ExchangeConfig | None = None, **kwargs):
+        super().__init__(id=id_prefix, **kwargs)
+        self.label_text = label
+        self.id_prefix = id_prefix
+        self.initial_config = initial_config
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.label_text, classes="dex-header")
+        yield Select(
+            [("Pacifica", "pacifica"), ("Variational", "variational"), ("Mock", "mock")],
+            prompt=i18n.t("exchange_type"),
+            id=f"{self.id_prefix}-type"
+        )
+        yield Vertical(id=f"{self.id_prefix}-fields")
+
+    def on_mount(self) -> None:
+        if self.initial_config:
+            allowed_types = ["pacifica", "variational", "mock"]
+            ex_type = self.initial_config.exchange_type
+            if ex_type in allowed_types:
+                select = self.query_one(f"#{self.id_prefix}-type", Select)
+                select.value = ex_type
+                self.update_fields(ex_type)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == f"{self.id_prefix}-type":
+            self.update_fields(event.value)
+
+    def update_fields(self, ex_type: str):
+        container = self.query_one(f"#{self.id_prefix}-fields", Vertical)
+        container.query("*").remove()
+        
+        fields = {
+            "pacifica": ["api_key", "api_secret", "subaccount_id"],
+            "variational": ["wallet_private_key"],
+            "mock": []
+        }.get(ex_type, [])
+        
+        for field in fields:
+            is_password = "key" in field or "secret" in field
+            val = ""
+            if self.initial_config and self.initial_config.exchange_type == ex_type:
+                val = self.initial_config.params.get(field, "")
+            
+            container.mount(Input(
+                placeholder=i18n.t(field), 
+                id=f"{self.id_prefix}-{field}", 
+                password=is_password,
+                value=val
+            ))
+
+    def get_config(self) -> ExchangeConfig | None:
+        ex_type = self.query_one(f"#{self.id_prefix}-type", Select).value
+        if not ex_type or ex_type == Select.BLANK:
+            return None
+            
+        params = {}
+        fields = {
+            "pacifica": ["api_key", "api_secret", "subaccount_id"],
+            "variational": ["wallet_private_key"],
+            "mock": []
+        }.get(ex_type, [])
+        
+        for field in fields:
+            val = self.query_one(f"#{self.id_prefix}-{field}", Input).value
+            params[field] = val
+            
+        return ExchangeConfig(exchange_type=ex_type, params=params)
+
+
+class AccountSettingsScreen(ModalScreen[AccountConfig]):
+    """Screen for adding or editing an account."""
+    def __init__(self, account: AccountConfig | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.account = account
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            title = i18n.t("edit_account") if self.account else i18n.t("add_account")
+            yield Label(title, id="dialog-title")
+            
+            with ScrollableContainer():
+                yield Label(i18n.t("account_name"))
+                yield Input(
+                    placeholder="Demo", 
+                    id="acc-name", 
+                    value=self.account.name if self.account else ""
+                )
+                
+                yield Label(i18n.t("target_size_usd"))
+                yield Input(
+                    placeholder="1000", 
+                    id="acc-size", 
+                    value=str(self.account.target_size_usd) if self.account else "1000"
+                )
+                
+                ex_a_init = self.account.exchanges[0] if self.account and len(self.account.exchanges) > 0 else None
+                ex_b_init = self.account.exchanges[1] if self.account and len(self.account.exchanges) > 1 else None
+                
+                yield ExchangeConfigForm("Exchange A", "ex-a", initial_config=ex_a_init)
+                yield ExchangeConfigForm("Exchange B", "ex-b", initial_config=ex_b_init)
+
+            with Horizontal(id="dialog-buttons"):
+                yield Button(i18n.t("cancel"), id="btn-cancel", variant="error")
+                yield Button(i18n.t("save"), id="btn-save", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-save":
+            try:
+                name = self.query_one("#acc-name", Input).value.strip()
+                if not name:
+                    self.app.notify("Name is required", severity="error")
+                    return
+
+                try:
+                    size = float(self.query_one("#acc-size", Input).value or "1000")
+                except ValueError:
+                    self.app.notify("Invalid target size", severity="error")
+                    return
+                
+                ex_a = self.query_one("#ex-a", ExchangeConfigForm).get_config()
+                ex_b = self.query_one("#ex-b", ExchangeConfigForm).get_config()
+                
+                if not ex_a or not ex_b:
+                    self.app.notify("Select both exchanges", severity="error")
+                    return
+
+                # Create new config or update existing
+                result = AccountConfig(
+                    name=name,
+                    target_size_usd=size,
+                    exchanges=[ex_a, ex_b],
+                    enabled=self.account.enabled if self.account else True
+                )
+                self.dismiss(result)
+            except Exception as e:
+                self.app.notify(f"Error: {str(e)}", severity="error")
+        else:
+            self.dismiss(None)
 
 
 class Flow(App):
@@ -81,6 +226,43 @@ class Flow(App):
     DataTable { height: auto; min-height: 10; border: solid $primary; }
     .controls { height: auto; margin-top: 1; align: center middle; }
     Button { margin-right: 2; }
+
+    #dialog {
+        padding: 1 2;
+        background: $surface;
+        border: thick $primary;
+        width: 70;
+        height: 40;
+        align: center middle;
+    }
+    #dialog-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+        color: $primary;
+    }
+    .dex-header {
+        margin-top: 1;
+        text-style: bold;
+        color: $secondary;
+        border-top: solid $surface-lighten-1;
+        padding-top: 1;
+    }
+    #dialog-buttons {
+        margin-top: 1;
+        align: center middle;
+        height: auto;
+    }
+    #dialog Input {
+        margin-bottom: 0;
+    }
+    ExchangeConfigForm {
+        height: auto;
+        margin-bottom: 1;
+    }
+    Select {
+        margin: 1 0;
+    }
     """
 
     def __init__(self):
@@ -118,10 +300,11 @@ class Flow(App):
         config_table.add_columns(
             i18n.t("name"), 
             i18n.t("target_size"), 
-            "Pacifica Key", 
-            "Variational Key"
+            "Exchange A", 
+            "Exchange B"
         )
         config_table.cursor_type = "row"
+        self._refresh_accounts_table()
 
         # Start Manager
         await self.manager.start_all()
@@ -160,21 +343,6 @@ class Flow(App):
                 self.query_one("#stat-pnl", StatusPill).update_value(i18n.t("total_pnl"), f"${total_pnl:.2f}", pnl_style)
                 self.query_one("#stat-bots", StatusPill).update_value(i18n.t("active_bots"), str(active_count))
 
-                # 3. Update Config Table
-                config_table = self.query_one("#accounts-config-table", DataTable)
-                if config_table.row_count != len(self.manager.config.accounts):
-                    config_table.clear()
-                    for idx, acc in enumerate(self.manager.config.accounts):
-                        pk = acc.pacifica.api_key[-4:] if acc.pacifica.api_key else "None"
-                        vk = acc.variational.api_key[-4:] if acc.variational.api_key else "None"
-                        config_table.add_row(
-                            acc.name, 
-                            str(acc.target_size_usd),
-                            f"***{pk}",
-                            f"***{vk}",
-                            key=str(idx)
-                        )
-                
             except Exception:
                 pass
 
@@ -182,20 +350,55 @@ class Flow(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-add-account":
-            new_acc = AccountConfig(name=f"Account {len(self.manager.config.accounts)+1}")
-            self.manager.add_account(new_acc)
-            self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
+            def add_account_callback(new_acc: AccountConfig | None) -> None:
+                if new_acc:
+                    self.manager.add_account(new_acc)
+                    self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
+                    self._refresh_accounts_table()
             
+            self.push_screen(AccountSettingsScreen(), add_account_callback)
+            
+        elif event.button.id == "btn-edit-account":
+            table = self.query_one("#accounts-config-table", DataTable)
+            if table.cursor_row is not None:
+                idx = table.cursor_row
+                acc = self.manager.config.accounts[idx]
+                
+                def edit_account_callback(new_acc: AccountConfig | None) -> None:
+                    if new_acc:
+                        self.manager.update_account(idx, new_acc)
+                        self.log_widget.write(f"[yellow]{i18n.t('edit_account')}: {new_acc.name}[/]")
+                        self._refresh_accounts_table()
+                
+                self.push_screen(AccountSettingsScreen(account=acc), edit_account_callback)
+
         elif event.button.id == "btn-remove-account":
             table = self.query_one("#accounts-config-table", DataTable)
             if table.cursor_row is not None:
                 idx = table.cursor_row
                 self.manager.remove_account(idx)
                 self.log_widget.write(f"[red]{i18n.t('remove_selected')}[/]")
+                self._refresh_accounts_table()
+
+    def _refresh_accounts_table(self):
+        """Force immediate refresh of the accounts table."""
+        config_table = self.query_one("#accounts-config-table", DataTable)
+        config_table.clear()
+        for idx, acc in enumerate(self.manager.config.accounts):
+            ex_a_info = acc.exchanges[0].exchange_type if len(acc.exchanges) > 0 else "None"
+            ex_b_info = acc.exchanges[1].exchange_type if len(acc.exchanges) > 1 else "None"
+            config_table.add_row(
+                acc.name, 
+                str(acc.target_size_usd),
+                ex_a_info.upper(),
+                ex_b_info.upper(),
+                key=str(idx)
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
         if event.data_table.id == "accounts-config-table":
             self.query_one("#btn-remove-account").disabled = False
+            self.query_one("#btn-edit-account").disabled = False
 
 if __name__ == "__main__":
     app = Flow()

@@ -3,16 +3,16 @@
     {
       "name": "Demo Account",
       "enabled": true,
-      "pacifica": {
-        "api_key": "",
-        "api_secret": "",
-        "wallet_private_key": null
-      },
-      "variational": {
-        "api_key": "",
-        "api_secret": "",
-        "wallet_private_key": null
-      },
+      "exchanges": [
+        {
+          "exchange_type": "mock",
+          "params": {}
+        },
+        {
+          "exchange_type": "mock",
+          "params": {}
+        }
+      ],
       "target_size_usd": 1000.0
     }
   ]

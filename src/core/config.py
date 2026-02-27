@@ -4,15 +4,13 @@ import json
 import os
 
 class ExchangeConfig(BaseModel):
-    api_key: str = ""
-    api_secret: str = ""
-    wallet_private_key: Optional[str] = None # For signing transactions/sessions
+    exchange_type: str = "mock"
+    params: dict[str, str] = Field(default_factory=dict)
     
 class AccountConfig(BaseModel):
     name: str = "Account 1"
     enabled: bool = True
-    pacifica: ExchangeConfig = Field(default_factory=ExchangeConfig)
-    variational: ExchangeConfig = Field(default_factory=ExchangeConfig)
+    exchanges: List[ExchangeConfig] = Field(default_factory=list)
     target_size_usd: float = 1000.0
 
 class GlobalConfig(BaseModel):

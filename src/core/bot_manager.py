@@ -1,20 +1,35 @@
 import asyncio
 import logging
 from typing import List, Dict
-from src.core.config import GlobalConfig, AccountConfig
+from src.core.config import GlobalConfig, AccountConfig, ExchangeConfig
+from src.exchanges.base import ExchangeBase
 from src.exchanges.mock import MockExchange
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
+
+def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> ExchangeBase:
+    """Factory to create exchange instances based on config."""
+    name = f"{config.exchange_type.capitalize()} {index} ({account_name})"
+    # In the future, this will return actual implementations
+    # For now, all map to MockExchange but could use different params
+    return MockExchange(name)
 
 class BotInstance:
     """Represents a single running strategy (one account)."""
     def __init__(self, config: AccountConfig):
         self.config = config
-        self.ex_a = MockExchange(f"Pacifica ({config.name})")
-        self.ex_b = MockExchange(f"Variational ({config.name})")
+        
+        # Ensure we have at least 2 exchanges configured
+        if len(config.exchanges) < 2:
+            # Fallback for old configs or incomplete ones
+            self.ex_a = MockExchange(f"Mock A ({config.name})")
+            self.ex_b = MockExchange(f"Mock B ({config.name})")
+        else:
+            self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
+            self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
         
         # Override mock balance with a realistic initial for demo
-        self.ex_a.balance = 10000.0 # Just mock
-        self.ex_b.balance = 10000.0
+        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = 10000.0
+        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = 10000.0
 
         self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
         self.strategy.target_size_usd = config.target_size_usd
@@ -53,7 +68,14 @@ class BotManager:
 
         # If no accounts exist, create a default mock one for first run
         if not self.config.accounts:
-            default_acc = AccountConfig(name="Demo Account", target_size_usd=1000.0)
+            default_acc = AccountConfig(
+                name="Demo Account", 
+                target_size_usd=1000.0,
+                exchanges=[
+                    ExchangeConfig(exchange_type="mock"),
+                    ExchangeConfig(exchange_type="mock")
+                ]
+            )
             self.config.accounts.append(default_acc)
             self.config.save()
 
@@ -96,3 +118,23 @@ class BotManager:
             
             self.config.accounts.pop(index)
             self.config.save()
+
+    def update_account(self, index: int, new_config: AccountConfig):
+        if 0 <= index < len(self.config.accounts):
+            old_config = self.config.accounts[index]
+            self.config.accounts[index] = new_config
+            self.config.save()
+            
+            # Restart bot if config changed significantly or just for safety
+            # Find old bot
+            bot_idx = next((i for i, b in enumerate(self.bots) if b.config == old_config), None)
+            if bot_idx is not None:
+                old_bot = self.bots[bot_idx]
+                asyncio.create_task(self._restart_bot(bot_idx, new_config))
+
+    async def _restart_bot(self, bot_idx: int, new_config: AccountConfig):
+        old_bot = self.bots[bot_idx]
+        await old_bot.stop()
+        new_bot = BotInstance(new_config)
+        self.bots[bot_idx] = new_bot
+        await new_bot.start()
