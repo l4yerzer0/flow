@@ -125,8 +125,11 @@ class ExchangeConfigForm(Vertical):
             ))
 
     def get_config(self) -> ExchangeConfig | None:
-        ex_type = self.query_one(f"#{self.id_prefix}-type", Select).value
-        if not ex_type or ex_type == Select.BLANK:
+        select = self.query_one(f"#{self.id_prefix}-type", Select)
+        ex_type = select.value
+        
+        # Select.BLANK or Select.NULL check
+        if not isinstance(ex_type, str) or ex_type == "":
             return None
             
         params = {}
@@ -137,8 +140,11 @@ class ExchangeConfigForm(Vertical):
         }.get(ex_type, [])
         
         for field in fields:
-            val = self.query_one(f"#{self.id_prefix}-{field}", Input).value
-            params[field] = val
+            try:
+                val = self.query_one(f"#{self.id_prefix}-{field}", Input).value
+                params[field] = val
+            except Exception:
+                params[field] = ""
             
         return ExchangeConfig(exchange_type=ex_type, params=params)
 
@@ -155,25 +161,28 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
             yield Label(title, id="dialog-title")
             
             with ScrollableContainer():
-                yield Label(i18n.t("account_name"))
-                yield Input(
-                    placeholder="Demo", 
-                    id="acc-name", 
-                    value=self.account.name if self.account else ""
-                )
-                
-                yield Label(i18n.t("target_size_usd"))
-                yield Input(
-                    placeholder="1000", 
-                    id="acc-size", 
-                    value=str(self.account.target_size_usd) if self.account else "1000"
-                )
+                with Horizontal(classes="dialog-row"):
+                    with Vertical():
+                        yield Label(i18n.t("account_name"))
+                        yield Input(
+                            placeholder="Demo", 
+                            id="acc-name", 
+                            value=self.account.name if self.account else ""
+                        )
+                    with Vertical():
+                        yield Label(i18n.t("target_size_usd"))
+                        yield Input(
+                            placeholder="1000", 
+                            id="acc-size", 
+                            value=str(self.account.target_size_usd) if self.account else "1000"
+                        )
                 
                 ex_a_init = self.account.exchanges[0] if self.account and len(self.account.exchanges) > 0 else None
                 ex_b_init = self.account.exchanges[1] if self.account and len(self.account.exchanges) > 1 else None
                 
-                yield ExchangeConfigForm("Exchange A", "ex-a", initial_config=ex_a_init)
-                yield ExchangeConfigForm("Exchange B", "ex-b", initial_config=ex_b_init)
+                with Horizontal(id="ex-row"):
+                    yield ExchangeConfigForm("Exchange A", "ex-a", initial_config=ex_a_init)
+                    yield ExchangeConfigForm("Exchange B", "ex-b", initial_config=ex_b_init)
 
             with Horizontal(id="dialog-buttons"):
                 yield Button(i18n.t("cancel"), id="btn-cancel", variant="error")
@@ -188,13 +197,17 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                     return
 
                 try:
-                    size = float(self.query_one("#acc-size", Input).value or "1000")
+                    size_val = self.query_one("#acc-size", Input).value
+                    size = float(size_val or "1000")
                 except ValueError:
                     self.app.notify("Invalid target size", severity="error")
                     return
                 
-                ex_a = self.query_one("#ex-a", ExchangeConfigForm).get_config()
-                ex_b = self.query_one("#ex-b", ExchangeConfigForm).get_config()
+                ex_a_form = self.query_one("#ex-a", ExchangeConfigForm)
+                ex_b_form = self.query_one("#ex-b", ExchangeConfigForm)
+                
+                ex_a = ex_a_form.get_config()
+                ex_b = ex_b_form.get_config()
                 
                 if not ex_a or not ex_b:
                     self.app.notify("Select both exchanges", severity="error")
@@ -209,7 +222,9 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 )
                 self.dismiss(result)
             except Exception as e:
-                self.app.notify(f"Error: {str(e)}", severity="error")
+                # Use plain string to avoid MarkupError if exception contains [ or ]
+                error_msg = str(e).replace("[", "\\[").replace("]", "\\]")
+                self.app.notify(f"Error: {error_msg}", severity="error")
         else:
             self.dismiss(None)
 
@@ -231,8 +246,9 @@ class Flow(App):
         padding: 1 2;
         background: $surface;
         border: thick $primary;
-        width: 70;
-        height: 40;
+        width: 100;
+        height: auto;
+        max-height: 35;
         align: center middle;
     }
     #dialog-title {
@@ -241,27 +257,41 @@ class Flow(App):
         margin-bottom: 1;
         color: $primary;
     }
-    .dex-header {
+    .dialog-row {
+        height: 4;
+        margin-bottom: 0;
+    }
+    .dialog-row Vertical {
+        width: 1fr;
+        padding: 0 1;
+        height: auto;
+    }
+    #ex-row {
+        height: auto;
+        border-top: solid $surface-lighten-1;
         margin-top: 1;
+        padding-top: 1;
+    }
+    .dex-header {
         text-style: bold;
         color: $secondary;
-        border-top: solid $surface-lighten-1;
-        padding-top: 1;
+        margin-bottom: 0;
     }
     #dialog-buttons {
         margin-top: 1;
         align: center middle;
-        height: auto;
+        height: 3;
     }
     #dialog Input {
         margin-bottom: 0;
     }
     ExchangeConfigForm {
+        width: 1fr;
         height: auto;
-        margin-bottom: 1;
+        padding: 0 2;
     }
     Select {
-        margin: 1 0;
+        margin: 0 0 1 0;
     }
     """
 
