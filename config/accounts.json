@@ -7,15 +7,17 @@
         {
           "exchange_type": "pacifica",
           "params": {
-            "public_key": "",
-            "private_key": ""
-          }
+            "public_key": "VSLV446xMmUru2ANspcyfuzUsyoTAgCRsJnhgkGTfRo",
+            "private_key": "H1SwT6EBHNj5SwQiMtvLHpcRhovLowrVcuEa1qFL6SvkQ5MU74XuGCW7cDpD3hpDyc1pxk3jC7FWPKmCvuVJrv9"
+          },
+          "last_error": null
         },
         {
           "exchange_type": "variational",
           "params": {
             "private_key": ""
-          }
+          },
+          "last_error": "Variational exchange is not implemented yet"
         }
       ],
       "target_size_usd": 1000.0

@@ -20,8 +20,7 @@ def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> Ex
         )
     
     if config.exchange_type == "variational":
-        # Placeholder for Variational, using same logic
-        return MockExchange(name)
+        raise NotImplementedError("Variational exchange is not implemented yet")
         
     # Default to Mock
     return MockExchange(name)
@@ -95,7 +94,13 @@ class BotManager:
         self._initialize_bots()
 
     def _initialize_bots(self):
-        self.bots = [BotInstance(acc) for acc in self.config.accounts if acc.enabled]
+        self.bots = []
+        for acc in self.config.accounts:
+            if acc.enabled:
+                try:
+                    self.bots.append(BotInstance(acc))
+                except Exception as e:
+                    print(f"Failed to initialize bot for {acc.name}: {e}")
 
     async def start_all(self):
         tasks = [bot.start() for bot in self.bots]
@@ -112,17 +117,16 @@ class BotManager:
         self.config.save()
         # Create and start new bot instance
         if account.enabled:
-            new_bot = BotInstance(account)
-            self.bots.append(new_bot)
-            # In a real app we'd await start() but this is sync call usually from UI
-            # We'll rely on the UI loop/task to start it or call explicit start
-            asyncio.create_task(new_bot.start())
+            try:
+                new_bot = BotInstance(account)
+                self.bots.append(new_bot)
+                asyncio.create_task(new_bot.start())
+            except Exception as e:
+                print(f"Failed to add bot for {account.name}: {e}")
 
     def remove_account(self, index: int):
         if 0 <= index < len(self.config.accounts):
             acc_to_remove = self.config.accounts[index]
-            # Find and stop the bot
-            # (Simple linear search by name/config reference)
             bot_to_remove = next((b for b in self.bots if b.config == acc_to_remove), None)
             
             if bot_to_remove:
@@ -138,16 +142,26 @@ class BotManager:
             self.config.accounts[index] = new_config
             self.config.save()
             
-            # Restart bot if config changed significantly or just for safety
-            # Find old bot
+            # Restart bot if config changed significantly
             bot_idx = next((i for i, b in enumerate(self.bots) if b.config == old_config), None)
             if bot_idx is not None:
-                old_bot = self.bots[bot_idx]
                 asyncio.create_task(self._restart_bot(bot_idx, new_config))
+            elif new_config.enabled:
+                # If bot wasn't running (e.g. error before), try starting it now
+                try:
+                    new_bot = BotInstance(new_config)
+                    self.bots.append(new_bot)
+                    asyncio.create_task(new_bot.start())
+                except Exception:
+                    pass
 
     async def _restart_bot(self, bot_idx: int, new_config: AccountConfig):
         old_bot = self.bots[bot_idx]
         await old_bot.stop()
-        new_bot = BotInstance(new_config)
-        self.bots[bot_idx] = new_bot
-        await new_bot.start()
+        try:
+            new_bot = BotInstance(new_config)
+            self.bots[bot_idx] = new_bot
+            await new_bot.start()
+        except Exception as e:
+            print(f"Failed to restart bot: {e}")
+            self.bots.pop(bot_idx)

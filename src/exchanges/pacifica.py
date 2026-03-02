@@ -71,13 +71,13 @@ class PacificaExchange(ExchangeBase):
         signature_bytes = self.keypair.sign_message(message_bytes)
         signature_b58 = base58.b58encode(bytes(signature_bytes)).decode("utf-8")
         
-        return {
+        res = {
             "account": str(self.keypair.pubkey()),
             "signature": signature_b58,
             "timestamp": timestamp,
             "expiry_window": expiry_window,
-            "agent_wallet": None
         }
+        return res
 
     async def _request(self, method: str, endpoint: str, data: dict = None, sign_type: str = None) -> dict:
         url = f"{self.BASE_URL}{endpoint}"
@@ -88,19 +88,40 @@ class PacificaExchange(ExchangeBase):
             # Flatten payload for the request
             payload.update(auth_fields)
 
+        # Ensure no None values are sent in params or json
+        payload = {k: v for k, v in payload.items() if v is not None}
+
         async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, json=payload if method != "GET" else None, params=payload if method == "GET" else None) as resp:
+            # For GET requests we use params, for others - json body
+            kwargs = {}
+            if method == "GET":
+                kwargs["params"] = payload
+            else:
+                kwargs["json"] = payload
+
+            async with session.request(method, url, **kwargs) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     raise Exception(f"Pacifica API Error: {resp.status} - {text}")
                 return await resp.json()
 
     async def get_balance(self, asset: str = "USDC") -> Decimal:
-        # GET /account/info requires signature (account/info type)
-        resp = await self._request("GET", "/account/info", {"account": self.api_key}, sign_type="account_info")
-        # Structure depends on real API, but usually contains subaccounts or direct balance
-        # Mocking extraction for now:
-        return Decimal(str(resp.get("balance", 0)))
+        # According to docs: GET /account
+        resp = await self._request("GET", "/account", {"account": self.api_key}, sign_type="account")
+        
+        # Based on the documented response structure
+        # resp["data"] should contain subaccounts
+        data = resp.get("data", {})
+        if not data:
+            return Decimal("0")
+            
+        subaccounts = data.get("subaccounts", [])
+        for sub in subaccounts:
+            if str(sub.get("id")) == str(self.subaccount_id):
+                # Total value is usually a good proxy for balance in USDC
+                return Decimal(str(sub.get("total_value", 0)))
+                
+        return Decimal("0")
 
     async def get_price(self, symbol: str) -> Decimal:
         # Public endpoint usually

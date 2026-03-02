@@ -6,6 +6,7 @@ import os
 class ExchangeConfig(BaseModel):
     exchange_type: str = "mock"
     params: dict[str, str] = Field(default_factory=dict)
+    last_error: Optional[str] = None
     
 class AccountConfig(BaseModel):
     name: str = "Account 1"
