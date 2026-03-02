@@ -1,16 +1,21 @@
 {
   "accounts": [
     {
-      "name": "Demo Account",
+      "name": "смерть в нищите",
       "enabled": true,
       "exchanges": [
         {
-          "exchange_type": "mock",
-          "params": {}
+          "exchange_type": "pacifica",
+          "params": {
+            "public_key": "",
+            "private_key": ""
+          }
         },
         {
-          "exchange_type": "mock",
-          "params": {}
+          "exchange_type": "variational",
+          "params": {
+            "private_key": ""
+          }
         }
       ],
       "target_size_usd": 1000.0

@@ -4,13 +4,26 @@ from typing import List, Dict
 from src.core.config import GlobalConfig, AccountConfig, ExchangeConfig
 from src.exchanges.base import ExchangeBase
 from src.exchanges.mock import MockExchange
+from src.exchanges.pacifica import PacificaExchange
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
 
 def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> ExchangeBase:
     """Factory to create exchange instances based on config."""
     name = f"{config.exchange_type.capitalize()} {index} ({account_name})"
-    # In the future, this will return actual implementations
-    # For now, all map to MockExchange but could use different params
+    
+    if config.exchange_type == "pacifica":
+        return PacificaExchange(
+            name=name,
+            api_key=config.params.get("public_key", ""),
+            api_secret=config.params.get("private_key", ""),
+            subaccount_id="0" # Default as requested
+        )
+    
+    if config.exchange_type == "variational":
+        # Placeholder for Variational, using same logic
+        return MockExchange(name)
+        
+    # Default to Mock
     return MockExchange(name)
 
 class BotInstance:

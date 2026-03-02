@@ -3,3 +3,5 @@ aiohttp>=3.9.0
 pydantic>=2.5.0
 python-dotenv>=1.0.0
 rich>=13.0.0
+solders>=0.21.0
+base58>=2.1.0

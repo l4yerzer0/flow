@@ -62,6 +62,19 @@ class AccountsTab(ScrollableContainer):
             yield Button(i18n.t("edit_selected"), variant="default", id="btn-edit-account", disabled=True)
             yield Button(i18n.t("remove_selected"), variant="error", id="btn-remove-account", disabled=True)
 
+class StatisticsTab(ScrollableContainer):
+    """View detailed statistics for all accounts."""
+    def compose(self) -> ComposeResult:
+        yield Label(i18n.t("statistics"), classes="section-title")
+        
+        with Horizontal(id="stats-summary"):
+            yield StatusPill(i18n.t("volume_24h"), id="stat-volume")
+            yield StatusPill(i18n.t("trades"), id="stat-trades")
+            yield StatusPill(i18n.t("funding_total"), id="stat-funding")
+            
+        yield Label(i18n.t("history"), classes="section-title")
+        yield DataTable(id="stats-table")
+
 class SettingsTab(ScrollableContainer):
     """Global Settings."""
     def compose(self) -> ComposeResult:
@@ -106,16 +119,21 @@ class ExchangeConfigForm(Vertical):
         container.query("*").remove()
         
         fields = {
-            "pacifica": ["api_key", "api_secret", "subaccount_id"],
-            "variational": ["wallet_private_key"],
+            "pacifica": ["public_key", "private_key"],
+            "variational": ["private_key"],
             "mock": []
         }.get(ex_type, [])
         
         for field in fields:
-            is_password = "key" in field or "secret" in field
+            is_password = "key" in field or "secret" in field or "private" in field
             val = ""
             if self.initial_config and self.initial_config.exchange_type == ex_type:
+                # Map old params or new ones
                 val = self.initial_config.params.get(field, "")
+                if not val:
+                    # Fallback for old keys
+                    if field == "public_key": val = self.initial_config.params.get("api_key", "")
+                    if field == "private_key": val = self.initial_config.params.get("api_secret", "") or self.initial_config.params.get("wallet_private_key", "")
             
             container.mount(Input(
                 placeholder=i18n.t(field), 
@@ -128,14 +146,13 @@ class ExchangeConfigForm(Vertical):
         select = self.query_one(f"#{self.id_prefix}-type", Select)
         ex_type = select.value
         
-        # Select.BLANK or Select.NULL check
         if not isinstance(ex_type, str) or ex_type == "":
             return None
             
         params = {}
         fields = {
-            "pacifica": ["api_key", "api_secret", "subaccount_id"],
-            "variational": ["wallet_private_key"],
+            "pacifica": ["public_key", "private_key"],
+            "variational": ["private_key"],
             "mock": []
         }.get(ex_type, [])
         
@@ -235,7 +252,7 @@ class Flow(App):
     
     CSS = """
     Screen { background: $surface-darken-1; }
-    #stats-row { height: 3; margin: 1 0; border-bottom: solid $primary; }
+    #stats-row, #stats-summary { height: 3; margin: 1 0; border-bottom: solid $primary; }
     .section-title { margin: 1 0; text-style: bold; color: $secondary; }
     RichLog { height: 1fr; border: solid $primary; background: $surface; }
     DataTable { height: auto; min-height: 10; border: solid $primary; }
@@ -306,6 +323,8 @@ class Flow(App):
                 yield DashboardTab()
             with TabPane(i18n.t("accounts"), id="tab-accounts"):
                 yield AccountsTab()
+            with TabPane(i18n.t("statistics"), id="tab-statistics"):
+                yield StatisticsTab()
             with TabPane(i18n.t("settings"), id="tab-settings"):
                 yield SettingsTab()
         yield Footer()
@@ -321,6 +340,7 @@ class Flow(App):
         table = self.query_one("#bots-table", DataTable)
         table.add_columns(
             i18n.t("account"), 
+            i18n.t("balance"),
             i18n.t("status"), 
             i18n.t("pnl_unrealized"), 
             i18n.t("positions")
@@ -336,6 +356,16 @@ class Flow(App):
         config_table.cursor_type = "row"
         self._refresh_accounts_table()
 
+        # Setup Statistics Table
+        stats_table = self.query_one("#stats-table", DataTable)
+        stats_table.add_columns(
+            i18n.t("account"), 
+            i18n.t("trades"), 
+            i18n.t("volume_24h"), 
+            i18n.t("funding_total"),
+            i18n.t("status")
+        )
+
         # Start Manager
         await self.manager.start_all()
         
@@ -345,13 +375,25 @@ class Flow(App):
     async def update_loop(self):
         while True:
             try:
+                # 0. Fetch all data needed (Balances, etc.)
+                balance_tasks = []
+                for bot in self.manager.bots:
+                    balance_tasks.append(bot.ex_a.get_balance())
+                    balance_tasks.append(bot.ex_b.get_balance())
+                
+                # Fetch in parallel
+                balances = await asyncio.gather(*balance_tasks)
+                
                 # 1. Update Dashboard Table
                 table = self.query_one("#bots-table", DataTable)
                 total_pnl = Decimal("0.0")
                 active_count = 0
                 
                 table.clear()
-                for bot in self.manager.bots:
+                for i, bot in enumerate(self.manager.bots):
+                    bal_a = balances[i*2]
+                    bal_b = balances[i*2+1]
+                    
                     status_style = "green" if bot.strategy.state == StrategyState.HEDGED else "white"
                     pnl = bot.strategy.current_pnl
                     total_pnl += pnl
@@ -363,6 +405,7 @@ class Flow(App):
                     
                     table.add_row(
                         bot.config.name,
+                        f"${bal_a:,.2f} / ${bal_b:,.2f}",
                         f"[{status_style}]{translated_state}[/]",
                         f"${pnl:.2f}",
                         "2" if bot.strategy.state == StrategyState.HEDGED else "0"
@@ -372,6 +415,35 @@ class Flow(App):
                 pnl_style = "bold green" if total_pnl >= 0 else "bold red"
                 self.query_one("#stat-pnl", StatusPill).update_value(i18n.t("total_pnl"), f"${total_pnl:.2f}", pnl_style)
                 self.query_one("#stat-bots", StatusPill).update_value(i18n.t("active_bots"), str(active_count))
+
+                # 3. Update Statistics Tab
+                stats_table = self.query_one("#stats-table", DataTable)
+                stats_table.clear()
+                total_volume = Decimal("0.0")
+                total_trades = 0
+                total_funding = Decimal("0.0")
+
+                for bot in self.manager.bots:
+                    # Mocking stats for now based on pnl/state
+                    volume = Decimal(str(bot.strategy.target_size_usd)) * 2 if bot.running else Decimal("0")
+                    trades = 2 if bot.strategy.state != StrategyState.IDLE else 0
+                    funding = bot.strategy.current_pnl * Decimal("0.1") # Dummy logic
+                    
+                    total_volume += volume
+                    total_trades += trades
+                    total_funding += funding
+
+                    stats_table.add_row(
+                        bot.config.name,
+                        str(trades),
+                        f"${volume:.2f}",
+                        f"${funding:.4f}",
+                        i18n.t(f"state_{bot.strategy.state.value.lower()}")
+                    )
+
+                self.query_one("#stat-volume", StatusPill).update_value(i18n.t("volume_24h"), f"${total_volume:.2f}")
+                self.query_one("#stat-trades", StatusPill).update_value(i18n.t("trades"), str(total_trades))
+                self.query_one("#stat-funding", StatusPill).update_value(i18n.t("funding_total"), f"${total_funding:.4f}")
 
             except Exception:
                 pass
