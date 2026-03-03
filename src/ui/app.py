@@ -9,12 +9,14 @@ from decimal import Decimal
 import asyncio
 from datetime import datetime
 
+from src.ui.env import is_mobile
+
 # --- Reusable UI ---
 
 class StatusPill(Static):
     DEFAULT_CSS = """
     StatusPill {
-        width: auto;
+        width: 1fr;
         height: 1;
         padding: 0 1;
         margin: 0 1;
@@ -41,7 +43,8 @@ class StatusPill(Static):
 class DashboardTab(Vertical):
     """Main view showing all accounts at a glance."""
     def compose(self) -> ComposeResult:
-        with Horizontal(id="stats-row"):
+        container_type = Vertical if is_mobile() else Horizontal
+        with container_type(id="stats-row"):
             yield StatusPill(i18n.t("total_pnl"), id="stat-pnl")
             yield StatusPill(i18n.t("active_bots"), id="stat-bots")
         
@@ -67,7 +70,8 @@ class StatisticsTab(ScrollableContainer):
     def compose(self) -> ComposeResult:
         yield Label(i18n.t("statistics"), classes="section-title")
         
-        with Horizontal(id="stats-summary"):
+        container_type = Vertical if is_mobile() else Horizontal
+        with container_type(id="stats-summary"):
             yield StatusPill(i18n.t("volume_24h"), id="stat-volume")
             yield StatusPill(i18n.t("trades"), id="stat-trades")
             yield StatusPill(i18n.t("funding_total"), id="stat-funding")
@@ -80,8 +84,12 @@ class SettingsTab(ScrollableContainer):
     def compose(self) -> ComposeResult:
         yield Label(i18n.t("settings"), classes="section-title")
         yield Label(i18n.t("refresh_rate"))
-        yield Input(placeholder="1000", value="1000")
+        yield Input(placeholder="1000", value="1000", id="setting-refresh")
         yield Button(i18n.t("save"), variant="primary")
+
+    def on_mount(self) -> None:
+        if is_mobile():
+            self.query_one("#setting-refresh", Input).focus()
 
 
 class ExchangeConfigForm(Vertical):
@@ -198,7 +206,8 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
             yield Label(title, id="dialog-title")
             
             with ScrollableContainer():
-                with Horizontal(classes="dialog-row"):
+                container_type = Vertical if is_mobile() else Horizontal
+                with container_type(classes="dialog-row"):
                     with Vertical():
                         yield Label(i18n.t("account_name"))
                         yield Input(
@@ -217,13 +226,17 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 ex_a_init = self.account.exchanges[0] if self.account and len(self.account.exchanges) > 0 else None
                 ex_b_init = self.account.exchanges[1] if self.account and len(self.account.exchanges) > 1 else None
                 
-                with Horizontal(id="ex-row"):
+                with container_type(id="ex-row"):
                     yield ExchangeConfigForm("Exchange A", "ex-a", initial_config=ex_a_init)
                     yield ExchangeConfigForm("Exchange B", "ex-b", initial_config=ex_b_init)
 
             with Horizontal(id="dialog-buttons"):
                 yield Button(i18n.t("cancel"), id="btn-cancel", variant="error")
                 yield Button(i18n.t("save"), id="btn-save", variant="primary")
+
+    def on_mount(self) -> None:
+        if is_mobile():
+            self.query_one("#acc-name", Input).focus()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
@@ -294,20 +307,20 @@ class Flow(App):
     
     CSS = """
     Screen { background: $surface-darken-1; }
-    #stats-row, #stats-summary { height: 3; margin: 1 0; border-bottom: solid $primary; }
+    #stats-row, #stats-summary { height: auto; min-height: 3; margin: 1 0; border-bottom: solid $primary; }
     .section-title { margin: 1 0; text-style: bold; color: $secondary; }
     RichLog { height: 1fr; border: solid $primary; background: $surface; }
     DataTable { height: auto; min-height: 10; border: solid $primary; }
     .controls { height: auto; margin-top: 1; align: center middle; }
-    Button { margin-right: 2; }
+    Button { margin-right: 1; }
 
     #dialog {
-        padding: 1 2;
+        padding: 1 1;
         background: $surface;
         border: thick $primary;
-        width: 100;
+        width: 95%;
         height: auto;
-        max-height: 40;
+        max-height: 45;
         align: center middle;
     }
     #dialog-title {
@@ -317,7 +330,7 @@ class Flow(App):
         color: $primary;
     }
     .dialog-row {
-        height: 4;
+        height: auto;
         margin-bottom: 0;
     }
     .dialog-row Vertical {
@@ -332,7 +345,7 @@ class Flow(App):
         padding-top: 1;
     }
     .dex-header-row {
-        height: 1;
+        height: auto;
         margin-bottom: 0;
     }
     .dex-header {
@@ -353,7 +366,10 @@ class Flow(App):
     #dialog-buttons {
         margin-top: 1;
         align: center middle;
-        height: 3;
+        height: auto;
+    }
+    #dialog-buttons Button {
+        margin: 0 1;
     }
     #dialog Input {
         margin-bottom: 0;
@@ -361,7 +377,7 @@ class Flow(App):
     ExchangeConfigForm {
         width: 1fr;
         height: auto;
-        padding: 0 2;
+        padding: 0 1;
     }
     Select {
         margin: 0 0 1 0;
