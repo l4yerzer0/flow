@@ -3,6 +3,7 @@ import time
 import asyncio
 import hmac
 import hashlib
+import ssl
 from decimal import Decimal
 from typing import List, Optional, Dict
 import aiohttp
@@ -91,9 +92,14 @@ class PacificaExchange(ExchangeBase):
         # Ensure no None values are sent in params or json
         payload = {k: v for k, v in payload.items() if v is not None}
 
+        # Bypass SSL verification to fix "CERTIFICATE_VERIFY_FAILED" on some Windows systems
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         async with aiohttp.ClientSession() as session:
             # For GET requests we use params, for others - json body
-            kwargs = {}
+            kwargs = {"ssl": ssl_ctx}
             if method == "GET":
                 kwargs["params"] = payload
             else:
