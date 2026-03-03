@@ -1,0 +1,11 @@
+# Configuration files containing secrets
+config/*.json
+config/accounts.json
+config/variational_tokens.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.env

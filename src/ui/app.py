@@ -3,7 +3,7 @@ from textual.containers import Container, Vertical, Horizontal, ScrollableContai
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button, Select
 from textual.screen import ModalScreen
 from src.core.config import AccountConfig, ExchangeConfig
-from src.core.bot_manager import BotManager, BotInstance, StrategyState
+from src.core.bot_manager import BotManager, BotInstance, StrategyState, create_exchange
 from src.core.i18n import i18n
 from decimal import Decimal
 import asyncio
@@ -93,13 +93,16 @@ class ExchangeConfigForm(Vertical):
         self.initial_config = initial_config
 
     def compose(self) -> ComposeResult:
-        yield Label(self.label_text, classes="dex-header")
+        with Horizontal(classes="dex-header-row"):
+            yield Label(self.label_text, classes="dex-header")
+            yield Label("", id=f"{self.id_prefix}-status", classes="status-label")
         yield Select(
             [("Pacifica", "pacifica"), ("Variational", "variational"), ("Mock", "mock")],
             prompt=i18n.t("exchange_type"),
             id=f"{self.id_prefix}-type"
         )
         yield Vertical(id=f"{self.id_prefix}-fields")
+        yield Label("", id=f"{self.id_prefix}-error", classes="error-label")
 
     def on_mount(self) -> None:
         if self.initial_config:
@@ -108,19 +111,36 @@ class ExchangeConfigForm(Vertical):
             if ex_type in allowed_types:
                 select = self.query_one(f"#{self.id_prefix}-type", Select)
                 select.value = ex_type
-                self.update_fields(ex_type)
+            
+            if self.initial_config.last_error:
+                self.set_error(self.initial_config.last_error)
+            elif self.initial_config.params:
+                self.set_status("OK", "green")
 
-    def on_select_changed(self, event: Select.Changed) -> None:
+    def set_status(self, text: str, color: str = "white"):
+        label = self.query_one(f"#{self.id_prefix}-status", Label)
+        label.update(f"[{color}]{text}[/]")
+
+    def set_error(self, text: str):
+        err_label = self.query_one(f"#{self.id_prefix}-error", Label)
+        err_label.update(f"[red]{text}[/]")
+        self.set_status("ERROR", "red")
+
+    def clear_status(self):
+        self.query_one(f"#{self.id_prefix}-status", Label).update("")
+        self.query_one(f"#{self.id_prefix}-error", Label).update("")
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == f"{self.id_prefix}-type":
-            self.update_fields(event.value)
+            await self.update_fields(event.value)
 
-    def update_fields(self, ex_type: str):
+    async def update_fields(self, ex_type: str):
         container = self.query_one(f"#{self.id_prefix}-fields", Vertical)
-        container.query("*").remove()
+        await container.query("*").remove()
         
         fields = {
             "pacifica": ["public_key", "private_key"],
-            "variational": ["private_key"],
+            "variational": ["public_key", "private_key"],
             "mock": []
         }.get(ex_type, [])
         
@@ -135,7 +155,7 @@ class ExchangeConfigForm(Vertical):
                     if field == "public_key": val = self.initial_config.params.get("api_key", "")
                     if field == "private_key": val = self.initial_config.params.get("api_secret", "") or self.initial_config.params.get("wallet_private_key", "")
             
-            container.mount(Input(
+            await container.mount(Input(
                 placeholder=i18n.t(field), 
                 id=f"{self.id_prefix}-{field}", 
                 password=is_password,
@@ -152,7 +172,7 @@ class ExchangeConfigForm(Vertical):
         params = {}
         fields = {
             "pacifica": ["public_key", "private_key"],
-            "variational": ["private_key"],
+            "variational": ["public_key", "private_key"],
             "mock": []
         }.get(ex_type, [])
         
@@ -205,7 +225,7 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 yield Button(i18n.t("cancel"), id="btn-cancel", variant="error")
                 yield Button(i18n.t("save"), id="btn-save", variant="primary")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
             try:
                 name = self.query_one("#acc-name", Input).value.strip()
@@ -223,18 +243,40 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 ex_a_form = self.query_one("#ex-a", ExchangeConfigForm)
                 ex_b_form = self.query_one("#ex-b", ExchangeConfigForm)
                 
-                ex_a = ex_a_form.get_config()
-                ex_b = ex_b_form.get_config()
+                ex_a_config = ex_a_form.get_config()
+                ex_b_config = ex_b_form.get_config()
                 
-                if not ex_a or not ex_b:
+                if not ex_a_config or not ex_b_config:
                     self.app.notify("Select both exchanges", severity="error")
                     return
+
+                # Perform Validation
+                self.app.notify(i18n.t("verifying_accounts") or "Verifying accounts...", severity="information")
+                
+                async def verify(form, config):
+                    form.clear_status()
+                    form.set_status("WAIT", "yellow")
+                    try:
+                        ex = create_exchange(config, name, 1)
+                        await ex.connect()
+                        await ex.get_balance()
+                        config.last_error = None
+                        form.set_status("OK", "green")
+                    except Exception as e:
+                        err_msg = str(e)
+                        config.last_error = err_msg
+                        form.set_error(err_msg)
+                
+                await asyncio.gather(
+                    verify(ex_a_form, ex_a_config),
+                    verify(ex_b_form, ex_b_config)
+                )
 
                 # Create new config or update existing
                 result = AccountConfig(
                     name=name,
                     target_size_usd=size,
-                    exchanges=[ex_a, ex_b],
+                    exchanges=[ex_a_config, ex_b_config],
                     enabled=self.account.enabled if self.account else True
                 )
                 self.dismiss(result)
@@ -265,7 +307,7 @@ class Flow(App):
         border: thick $primary;
         width: 100;
         height: auto;
-        max-height: 35;
+        max-height: 40;
         align: center middle;
     }
     #dialog-title {
@@ -289,10 +331,24 @@ class Flow(App):
         margin-top: 1;
         padding-top: 1;
     }
+    .dex-header-row {
+        height: 1;
+        margin-bottom: 0;
+    }
     .dex-header {
         text-style: bold;
         color: $secondary;
-        margin-bottom: 0;
+        width: auto;
+    }
+    .status-label {
+        margin-left: 1;
+        text-style: bold;
+    }
+    .error-label {
+        color: $error;
+        height: auto;
+        max-height: 2;
+        overflow: hidden;
     }
     #dialog-buttons {
         margin-top: 1;
@@ -487,13 +543,21 @@ class Flow(App):
         config_table = self.query_one("#accounts-config-table", DataTable)
         config_table.clear()
         for idx, acc in enumerate(self.manager.config.accounts):
-            ex_a_info = acc.exchanges[0].exchange_type if len(acc.exchanges) > 0 else "None"
-            ex_b_info = acc.exchanges[1].exchange_type if len(acc.exchanges) > 1 else "None"
+            ex_a = acc.exchanges[0] if len(acc.exchanges) > 0 else None
+            ex_b = acc.exchanges[1] if len(acc.exchanges) > 1 else None
+            
+            def fmt_ex(ex):
+                if not ex: return "NONE"
+                name = ex.exchange_type.upper()
+                if ex.last_error:
+                    return f"[red]{name} (ERROR)[/]"
+                return f"[green]{name} (OK)[/]"
+
             config_table.add_row(
                 acc.name, 
                 str(acc.target_size_usd),
-                ex_a_info.upper(),
-                ex_b_info.upper(),
+                fmt_ex(ex_a),
+                fmt_ex(ex_b),
                 key=str(idx)
             )
 
