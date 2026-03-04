@@ -3,6 +3,9 @@ config/*.json
 config/accounts.json
 config/variational_tokens.json
 
+#logs
+logs/debug.log
+
 # Python
 __pycache__/
 *.py[cod]
