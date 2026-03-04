@@ -115,19 +115,19 @@ class PacificaExchange(ExchangeBase):
         # According to docs: GET /account
         resp = await self._request("GET", "/account", {"account": self.api_key}, sign_type="account")
         
-        # Based on the documented response structure
-        # resp["data"] should contain subaccounts
         data = resp.get("data", {})
         if not data:
             return Decimal("0")
             
+        # Try to find specific subaccount balance
         subaccounts = data.get("subaccounts", [])
         for sub in subaccounts:
             if str(sub.get("id")) == str(self.subaccount_id):
-                # Total value is usually a good proxy for balance in USDC
                 return Decimal(str(sub.get("total_value", 0)))
-                
-        return Decimal("0")
+        
+        # Fallback to main account total value if subaccounts are empty or ID 0 is just the main one
+        total_val = data.get("total_value") or data.get("balance") or 0
+        return Decimal(str(total_val))
 
     async def get_price(self, symbol: str) -> Decimal:
         # Public endpoint usually

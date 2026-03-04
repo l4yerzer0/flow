@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from decimal import Decimal
 from typing import List, Dict
 from src.core.config import GlobalConfig, AccountConfig, ExchangeConfig
 from src.exchanges.base import ExchangeBase
@@ -37,22 +38,41 @@ class BotInstance:
         
         # Ensure we have at least 2 exchanges configured
         if len(config.exchanges) < 2:
-            # Fallback for old configs or incomplete ones
             self.ex_a = MockExchange(f"Mock A ({config.name})")
             self.ex_b = MockExchange(f"Mock B ({config.name})")
         else:
             self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
             self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
         
-        # Override mock balance with a realistic initial for demo
-        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = 10000.0
-        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = 10000.0
+        # Balance Cache
+        self.bal_a = Decimal("0.0")
+        self.bal_b = Decimal("0.0")
+        self.last_bal_update = 0.0
+
+        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = Decimal("10000.0")
+        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = Decimal("10000.0")
 
         self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
         self.strategy.target_size_usd = config.target_size_usd
         
         self.running = False
         self.task: asyncio.Task = None
+
+    async def update_balances(self, force=False):
+        """Smart update balances: fast if trading, slow if idle/disabled."""
+        import time
+        now = time.time()
+        
+        # Interval: 1s if active, 600s (10m) if idle or disabled
+        interval = 1.0 if (self.running and self.strategy.state != StrategyState.IDLE) else 600.0
+        
+        if force or (now - self.last_bal_update > interval):
+            # No try-except here, let errors bubble up to UI update loop
+            self.bal_a, self.bal_b = await asyncio.gather(
+                self.ex_a.get_balance(),
+                self.ex_b.get_balance()
+            )
+            self.last_bal_update = now
 
     async def start(self):
         if self.running: return
@@ -101,14 +121,15 @@ class BotManager:
     def _initialize_bots(self):
         self.bots = []
         for acc in self.config.accounts:
-            if acc.enabled:
-                try:
-                    self.bots.append(BotInstance(acc))
-                except Exception as e:
-                    print(f"Failed to initialize bot for {acc.name}: {e}")
+            try:
+                # We create instances for ALL accounts to track balances
+                self.bots.append(BotInstance(acc))
+            except Exception as e:
+                print(f"Failed to initialize bot for {acc.name}: {e}")
 
     async def start_all(self):
-        tasks = [bot.start() for bot in self.bots]
+        # Only start the strategy loop for enabled accounts
+        tasks = [bot.start() for bot in self.bots if bot.config.enabled]
         if tasks:
             await asyncio.gather(*tasks)
 

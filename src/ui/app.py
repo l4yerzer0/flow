@@ -7,6 +7,7 @@ from src.core.bot_manager import BotManager, BotInstance, StrategyState, create_
 from src.core.i18n import i18n
 from decimal import Decimal
 import asyncio
+import os
 from datetime import datetime
 
 from src.ui.env import is_mobile
@@ -387,6 +388,19 @@ class Flow(App):
     def __init__(self):
         super().__init__()
         self.manager = BotManager()
+        # Create logs directory if not exists
+        os.makedirs("logs", exist_ok=True)
+        self.log_file = open("logs/debug.log", "a", encoding="utf-8")
+
+    def log_message(self, message: str, color: str = "white"):
+        """Write to UI log and persistent file."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        clean_msg = message.replace("[", "").replace("]", "").split("/")[-1] # Simple strip for file
+        self.log_file.write(f"[{timestamp}] {clean_msg}\n")
+        self.log_file.flush()
+        
+        if hasattr(self, "log_widget"):
+            self.log_widget.write(f"[{color}]{message}[/]")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -423,7 +437,8 @@ class Flow(App):
             i18n.t("name"), 
             i18n.t("target_size"), 
             "Exchange A", 
-            "Exchange B"
+            "Exchange B",
+            i18n.t("balance")
         )
         config_table.cursor_type = "row"
         self._refresh_accounts_table()
@@ -438,57 +453,84 @@ class Flow(App):
             i18n.t("status")
         )
 
-        # Start Manager
-        await self.manager.start_all()
-        
+        # Start Manager (Safe start)
+        try:
+            await self.manager.start_all()
+        except Exception as e:
+            self.log_message(f"Startup Error: {str(e)}", "red")
+
         # Start UI Loop
         asyncio.create_task(self.update_loop())
 
     async def update_loop(self):
         while True:
             try:
-                # 0. Fetch all data needed (Balances, etc.)
-                balance_tasks = []
-                for bot in self.manager.bots:
-                    balance_tasks.append(bot.ex_a.get_balance())
-                    balance_tasks.append(bot.ex_b.get_balance())
+                # 0. Smart Balance Update (handles 1s or 10m internally)
+                tasks = [bot.update_balances() for bot in self.manager.bots]
+                if tasks:
+                    await asyncio.gather(*tasks)
                 
-                # Fetch in parallel
-                balances = await asyncio.gather(*balance_tasks)
-                
-                # 1. Update Dashboard Table
+                # 1. Update Dashboard Table (Only running bots)
                 table = self.query_one("#bots-table", DataTable)
                 total_pnl = Decimal("0.0")
                 active_count = 0
                 
                 table.clear()
-                for i, bot in enumerate(self.manager.bots):
-                    bal_a = balances[i*2]
-                    bal_b = balances[i*2+1]
-                    
+                for bot in self.manager.bots:
+                    if not bot.config.enabled:
+                        continue
+                        
+                    if bot.last_bal_update == 0:
+                        bal_str = "[dim]Loading...[/]"
+                    else:
+                        bal_str = f"${bot.bal_a:,.2f} / ${bot.bal_b:,.2f}"
+                        
                     status_style = "green" if bot.strategy.state == StrategyState.HEDGED else "white"
                     pnl = bot.strategy.current_pnl
                     total_pnl += pnl
-                    if bot.running: active_count += 1
+                    active_count += 1
                     
-                    # Translate state using prefixed key
                     state_key = f"state_{bot.strategy.state.value.lower()}"
                     translated_state = i18n.t(state_key)
                     
                     table.add_row(
                         bot.config.name,
-                        f"${bal_a:,.2f} / ${bal_b:,.2f}",
+                        bal_str,
                         f"[{status_style}]{translated_state}[/]",
                         f"${pnl:.2f}",
                         "2" if bot.strategy.state == StrategyState.HEDGED else "0"
                     )
 
-                # 2. Update Stats
+                # 2. Update Stats (Dashboard Summary)
                 pnl_style = "bold green" if total_pnl >= 0 else "bold red"
                 self.query_one("#stat-pnl", StatusPill).update_value(i18n.t("total_pnl"), f"${total_pnl:.2f}", pnl_style)
                 self.query_one("#stat-bots", StatusPill).update_value(i18n.t("active_bots"), str(active_count))
 
-                # 3. Update Statistics Tab
+                # 3. Update Accounts Tab Table (All bots + balances)
+                config_table = self.query_one("#accounts-config-table", DataTable)
+                config_table.clear()
+                for idx, bot in enumerate(self.manager.bots):
+                    ex_a = bot.config.exchanges[0] if len(bot.config.exchanges) > 0 else None
+                    ex_b = bot.config.exchanges[1] if len(bot.config.exchanges) > 1 else None
+                    
+                    def fmt_ex(ex):
+                        if not ex: return "NONE"
+                        name = ex.exchange_type.upper()
+                        if hasattr(ex, 'last_error') and ex.last_error:
+                            return f"[red]{name}[/]"
+                        return name
+
+                    bal_str = f"${bot.bal_a:,.2f} / ${bot.bal_b:,.2f}"
+                    config_table.add_row(
+                        bot.config.name, 
+                        str(bot.config.target_size_usd),
+                        fmt_ex(ex_a),
+                        fmt_ex(ex_b),
+                        bal_str,
+                        key=str(idx)
+                    )
+
+                # 4. Update Statistics Tab
                 stats_table = self.query_one("#stats-table", DataTable)
                 stats_table.clear()
                 total_volume = Decimal("0.0")
@@ -496,10 +538,11 @@ class Flow(App):
                 total_funding = Decimal("0.0")
 
                 for bot in self.manager.bots:
-                    # Mocking stats for now based on pnl/state
+                    if not bot.config.enabled: continue
+                    
                     volume = Decimal(str(bot.strategy.target_size_usd)) * 2 if bot.running else Decimal("0")
                     trades = 2 if bot.strategy.state != StrategyState.IDLE else 0
-                    funding = bot.strategy.current_pnl * Decimal("0.1") # Dummy logic
+                    funding = bot.strategy.current_pnl * Decimal("0.1")
                     
                     total_volume += volume
                     total_trades += trades
@@ -517,8 +560,11 @@ class Flow(App):
                 self.query_one("#stat-trades", StatusPill).update_value(i18n.t("trades"), str(total_trades))
                 self.query_one("#stat-funding", StatusPill).update_value(i18n.t("funding_total"), f"${total_funding:.4f}")
 
-            except Exception:
-                pass
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                self.log_widget.write(f"[red]UI Update Error: {str(e)}[/]")
+                self.log_widget.write(f"[dim red]{error_details}[/]")
 
             await asyncio.sleep(1.0)
 
@@ -555,10 +601,14 @@ class Flow(App):
                 self._refresh_accounts_table()
 
     def _refresh_accounts_table(self):
-        """Force immediate refresh of the accounts table."""
+        """Force immediate refresh of the accounts table with current data."""
         config_table = self.query_one("#accounts-config-table", DataTable)
         config_table.clear()
+        
+        # We need to map config accounts to bots to get cached balances
         for idx, acc in enumerate(self.manager.config.accounts):
+            bot = next((b for b in self.manager.bots if b.config == acc), None)
+            
             ex_a = acc.exchanges[0] if len(acc.exchanges) > 0 else None
             ex_b = acc.exchanges[1] if len(acc.exchanges) > 1 else None
             
@@ -566,14 +616,19 @@ class Flow(App):
                 if not ex: return "NONE"
                 name = ex.exchange_type.upper()
                 if ex.last_error:
-                    return f"[red]{name} (ERROR)[/]"
-                return f"[green]{name} (OK)[/]"
+                    return f"[red]{name}[/]"
+                return name
+
+            bal_str = "--"
+            if bot:
+                bal_str = f"${bot.bal_a:,.2f} / ${bot.bal_b:,.2f}"
 
             config_table.add_row(
                 acc.name, 
                 str(acc.target_size_usd),
                 fmt_ex(ex_a),
                 fmt_ex(ex_b),
+                bal_str,
                 key=str(idx)
             )
 

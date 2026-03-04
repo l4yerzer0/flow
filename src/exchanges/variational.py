@@ -47,7 +47,7 @@ class VariationalExchange(ExchangeBase):
         api_secret: Private Key (0x...)
         """
         super().__init__(name, api_key, api_secret)
-        self.wallet_address = api_key.lower()
+        self.wallet_address = (api_key or "").lower()
         self.private_key = api_secret
         if self.private_key and self.private_key.startswith("0x"):
             self.private_key = self.private_key[2:]
@@ -57,10 +57,11 @@ class VariationalExchange(ExchangeBase):
         self.base_url = self.INTERNAL_API_URL
         
         # Load from persistent cache
-        cache = _load_token_cache()
-        self.access_token = cache.get(self.wallet_address)
-        if self.access_token:
-            self._apply_token(self.access_token)
+        if self.wallet_address:
+            cache = _load_token_cache()
+            self.access_token = cache.get(self.wallet_address)
+            if self.access_token:
+                self._apply_token(self.access_token)
 
     def _apply_token(self, token: str):
         """Apply token to scraper cookies."""
@@ -74,19 +75,28 @@ class VariationalExchange(ExchangeBase):
             self.connected = True
             return True
             
+        if not self.wallet_address or not self.private_key:
+            raise ValueError("Wallet address and private key are required for Variational")
+
         try:
-            logger.info(f"Authenticating Variational for {self.wallet_address}...")
             # Step 1: Generate signing data
             payload = {"address": self.wallet_address}
             resp1 = await asyncio.to_thread(
                 lambda: self.scraper.post(f"{self.base_url}/auth/generate_signing_data", json=payload)
             )
-            resp1.raise_for_status()
-            data1 = resp1.json()
-            message_to_sign = data1.get("signingData") or data1.get("message")
-            
+            if resp1.status_code != 200:
+                raise Exception(f"Generate signing data failed: {resp1.status_code} - {resp1.text}")
+                
+            # Handle both JSON and raw text responses
+            try:
+                data1 = resp1.json()
+                message_to_sign = data1.get("signingData") or data1.get("message")
+            except Exception:
+                # Fallback to raw text if not JSON
+                message_to_sign = resp1.text
+
             if not message_to_sign:
-                raise ValueError("No message to sign found in response")
+                raise ValueError(f"No message to sign found. Response: {resp1.text[:100]}")
                 
             # Step 2: Sign message
             message = encode_defunct(text=message_to_sign)
@@ -103,7 +113,9 @@ class VariationalExchange(ExchangeBase):
             resp2 = await asyncio.to_thread(
                 lambda: self.scraper.post(f"{self.base_url}/auth/login", json=login_payload)
             )
-            resp2.raise_for_status()
+            if resp2.status_code != 200:
+                raise Exception(f"Login failed: {resp2.status_code} - {resp2.text}")
+                
             data2 = resp2.json()
             token = data2.get("token") or data2.get("accessToken")
             
@@ -115,15 +127,13 @@ class VariationalExchange(ExchangeBase):
                 _save_token_cache(cache)
                 
                 self.connected = True
-                logger.info("Variational authentication successful.")
                 return True
             else:
-                raise ValueError("No access token received")
+                raise ValueError(f"No access token in response: {data2}")
                 
         except Exception as e:
-            logger.error(f"Variational Auth Error: {e}")
             self.connected = False
-            return False
+            raise e
 
     async def _request(self, method: str, endpoint: str, data: dict = None, is_public: bool = False) -> dict:
         url = f"{self.PUBLIC_API_URL if is_public else self.INTERNAL_API_URL}{endpoint}"
@@ -151,15 +161,11 @@ class VariationalExchange(ExchangeBase):
         return resp.json()
 
     async def get_balance(self, asset: str = "USDC") -> Decimal:
-        try:
-            # Endpoint from old connector: /settlement_pools/details
-            data = await self._request("GET", "/settlement_pools/details")
-            # balance or margin_balance
-            equity = data.get("margin_balance") or data.get("balance", 0.0)
-            return Decimal(str(equity))
-        except Exception as e:
-            logger.error(f"Variational get_balance error: {e}")
-            return Decimal("0.0")
+        # Endpoint from old connector: /settlement_pools/details
+        data = await self._request("GET", "/settlement_pools/details")
+        # balance or margin_balance
+        equity = data.get("margin_balance") or data.get("balance", 0.0)
+        return Decimal(str(equity))
 
     async def get_price(self, symbol: str) -> Decimal:
         try:
