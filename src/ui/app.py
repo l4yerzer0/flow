@@ -214,7 +214,7 @@ class ExchangeConfigForm(Vertical):
             yield Label(self.label_text, classes="dex-header")
             yield Label("", id=f"{self.id_prefix}-status", classes="status-label")
         yield Select(
-            [("Pacifica", "pacifica"), ("Variational", "variational"), ("Mock", "mock")],
+            [("Pacifica", "pacifica"), ("Variational", "variational")],
             prompt=i18n.t("exchange_type"),
             id=f"{self.id_prefix}-type"
         )
@@ -223,7 +223,7 @@ class ExchangeConfigForm(Vertical):
 
     def on_mount(self) -> None:
         if self.initial_config:
-            allowed_types = ["pacifica", "variational", "mock"]
+            allowed_types = ["pacifica", "variational"]
             ex_type = self.initial_config.exchange_type
             if ex_type in allowed_types:
                 select = self.query_one(f"#{self.id_prefix}-type", Select)
@@ -258,7 +258,6 @@ class ExchangeConfigForm(Vertical):
         fields = {
             "pacifica": ["public_key", "private_key"],
             "variational": ["public_key", "private_key"],
-            "mock": []
         }.get(ex_type, [])
         
         for field in fields:
@@ -290,7 +289,6 @@ class ExchangeConfigForm(Vertical):
         fields = {
             "pacifica": ["public_key", "private_key"],
             "variational": ["public_key", "private_key"],
-            "mock": []
         }.get(ex_type, [])
         
         for field in fields:

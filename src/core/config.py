@@ -4,7 +4,7 @@ import os
 from src.core.credentials import encrypt_params, decrypt_params
 
 class ExchangeConfig(BaseModel):
-    exchange_type: str = "mock"
+    exchange_type: str = "pacifica"
     params: dict[str, str] = Field(default_factory=dict)
     last_error: Optional[str] = None
 

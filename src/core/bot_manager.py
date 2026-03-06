@@ -9,7 +9,6 @@ from src.core.config import (
     SettingsProfile,
 )
 from src.exchanges.base import ExchangeBase
-from src.exchanges.mock import MockExchange
 from src.exchanges.pacifica import PacificaExchange
 from src.exchanges.variational import VariationalExchange
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
@@ -33,22 +32,20 @@ def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> Ex
             api_secret=config.params.get("private_key", "")
         )
 
-    # Default to Mock
-    return MockExchange(name)
+    raise ValueError(f"Unsupported exchange type: {config.exchange_type}")
 
 class BotInstance:
     """Represents a single running strategy (one account)."""
     def __init__(self, config: AccountConfig, settings: StrategySettings):
         self.config = config
         self.settings = settings
-        
-        # Ensure we have at least 2 exchanges configured
+
+        # We require exactly two real exchange configs.
         if len(config.exchanges) < 2:
-            self.ex_a = MockExchange(f"Mock A ({config.name})")
-            self.ex_b = MockExchange(f"Mock B ({config.name})")
-        else:
-            self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
-            self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
+            raise ValueError(f"Account '{config.name}' must have 2 exchanges configured")
+
+        self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
+        self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
         
         # Balance Cache
         self.bal_a = Decimal("0.0")
@@ -110,19 +107,6 @@ class BotManager:
         self.config = GlobalConfig.load(config_path)
         self.bots: List[BotInstance] = []
         self._ensure_default_profiles()
-
-        # If no accounts exist, create a default mock one for first run
-        if not self.config.accounts:
-            default_acc = AccountConfig(
-                name="Demo Account", 
-                settings_profile_id="default",
-                exchanges=[
-                    ExchangeConfig(exchange_type="mock"),
-                    ExchangeConfig(exchange_type="mock")
-                ]
-            )
-            self.config.accounts.append(default_acc)
-            self.config.save()
 
         self._initialize_bots()
 
