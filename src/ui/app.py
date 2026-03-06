@@ -1,11 +1,13 @@
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button, Select
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
+from textual.command import CommandPalette
 from src.core.config import AccountConfig, ExchangeConfig
 from src.core.bot_manager import BotManager, BotInstance, StrategyState, create_exchange
 from src.core.i18n import i18n
 from decimal import Decimal
+from typing import Iterable
 import asyncio
 import os
 from datetime import datetime
@@ -18,11 +20,12 @@ class StatusPill(Static):
     DEFAULT_CSS = """
     StatusPill {
         width: 1fr;
-        height: 1;
+        height: 3;
         padding: 0 1;
-        margin: 0 1;
+        margin: 0 1 0 0;
         background: $surface;
-        color: $text-muted;
+        color: $text;
+        border: round $primary-background;
     }
     """
     def __init__(self, label: str, value: str = "--", **kwargs):
@@ -31,7 +34,7 @@ class StatusPill(Static):
         self.value = value
 
     def render(self):
-        return f"{self.label}: {self.value}"
+        return f"[dim]{self.label}[/]\n{self.value}"
 
     def update_value(self, label, value, style=None):
         if style:
@@ -84,9 +87,10 @@ class SettingsTab(ScrollableContainer):
     """Global Settings."""
     def compose(self) -> ComposeResult:
         yield Label(i18n.t("settings"), classes="section-title")
-        yield Label(i18n.t("refresh_rate"))
-        yield Input(placeholder="1000", value="1000", id="setting-refresh")
-        yield Button(i18n.t("save"), variant="primary")
+        with Vertical(classes="settings-card"):
+            yield Label(i18n.t("refresh_rate"), classes="field-label")
+            yield Input(placeholder="1000", value="1000", id="setting-refresh")
+            yield Button(i18n.t("save"), variant="primary", id="btn-save-settings")
 
     def on_mount(self) -> None:
         if is_mobile():
@@ -209,15 +213,15 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
             with ScrollableContainer():
                 container_type = Vertical if is_mobile() else Horizontal
                 with container_type(classes="dialog-row"):
-                    with Vertical():
-                        yield Label(i18n.t("account_name"))
+                    with Vertical(classes="input-group"):
+                        yield Label(i18n.t("account_name"), classes="field-label")
                         yield Input(
                             placeholder="Demo", 
                             id="acc-name", 
                             value=self.account.name if self.account else ""
                         )
-                    with Vertical():
-                        yield Label(i18n.t("target_size_usd"))
+                    with Vertical(classes="input-group"):
+                        yield Label(i18n.t("target_size_usd"), classes="field-label")
                         yield Input(
                             placeholder="1000", 
                             id="acc-size", 
@@ -305,20 +309,100 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
 class Flow(App):
     TITLE = i18n.t("app_title")
     SUB_TITLE = i18n.t("app_subtitle")
+    COMMAND_PALETTE_PLACEHOLDER = i18n.t("placeholder_cmd")
+    _SYSTEM_COMMAND_TRANSLATIONS = {
+        "Maximize the focused widget": {
+            "ru_title": "Развернуть активный виджет",
+            "ru_help": "Включить режим фокуса для текущего виджета",
+        },
+        "Minimize the focused widget": {
+            "ru_title": "Свернуть активный виджет",
+            "ru_help": "Выйти из режима фокуса",
+        },
+        "Toggle dark mode": {
+            "ru_title": "Переключить темную тему",
+            "ru_help": "Сменить светлую/темную тему интерфейса",
+        },
+        "Quit the application": {
+            "ru_title": "Выйти из приложения",
+            "ru_help": "Закрыть Flow",
+        },
+    }
     
     CSS = """
-    Screen { background: $surface-darken-1; }
-    #stats-row, #stats-summary { height: auto; min-height: 3; margin: 1 0; border-bottom: solid $primary; }
-    .section-title { margin: 1 0; text-style: bold; color: $secondary; }
-    RichLog { height: 1fr; border: solid $primary; background: $surface; }
-    DataTable { height: auto; min-height: 10; border: solid $primary; }
-    .controls { height: auto; margin-top: 1; align: center middle; }
-    Button { margin-right: 1; }
+    Screen {
+        background: $surface-darken-1;
+        color: $text;
+    }
+    Header {
+        background: $primary-darken-1;
+        color: $text;
+    }
+    Footer {
+        background: $surface-darken-2;
+        color: $text-muted;
+    }
+    TabbedContent {
+        padding: 0 1;
+    }
+    TabPane {
+        padding: 0 0 1 0;
+    }
+    #stats-row, #stats-summary {
+        height: auto;
+        min-height: 3;
+        margin: 1 0;
+    }
+    .section-title {
+        margin: 1 0;
+        text-style: bold;
+        color: $accent;
+    }
+    RichLog {
+        height: 1fr;
+        border: round $primary;
+        background: $surface;
+        padding: 0 1;
+    }
+    DataTable {
+        height: auto;
+        min-height: 10;
+        border: round $primary;
+        background: $surface;
+    }
+    .controls {
+        height: auto;
+        margin-top: 1;
+        align: left middle;
+    }
+    Button {
+        margin-right: 1;
+        min-width: 16;
+    }
+    Input, Select {
+        margin: 0 0 1 0;
+    }
+    .field-label {
+        color: $text-muted;
+        margin-bottom: 0;
+    }
+    .settings-card {
+        border: round $primary-background;
+        padding: 1 1;
+        margin: 0 0 1 0;
+        background: $surface;
+        width: 1fr;
+        max-width: 60;
+    }
+    #btn-save-settings {
+        width: auto;
+        align-horizontal: right;
+    }
 
     #dialog {
         padding: 1 1;
         background: $surface;
-        border: thick $primary;
+        border: round $primary;
         width: 95%;
         height: auto;
         max-height: 45;
@@ -332,16 +416,20 @@ class Flow(App):
     }
     .dialog-row {
         height: auto;
-        margin-bottom: 0;
+        margin-bottom: 1;
     }
     .dialog-row Vertical {
         width: 1fr;
-        padding: 0 1;
+        padding: 0 1 1 1;
         height: auto;
+    }
+    .input-group {
+        border: round $primary-background;
+        background: $surface-lighten-1;
     }
     #ex-row {
         height: auto;
-        border-top: solid $surface-lighten-1;
+        border-top: solid $primary-background;
         margin-top: 1;
         padding-top: 1;
     }
@@ -378,10 +466,12 @@ class Flow(App):
     ExchangeConfigForm {
         width: 1fr;
         height: auto;
-        padding: 0 1;
+        padding: 0 1 1 1;
+        border: round $primary-background;
+        background: $surface;
     }
-    Select {
-        margin: 0 0 1 0;
+    #accounts-config-table, #bots-table, #stats-table {
+        margin-bottom: 1;
     }
     """
 
@@ -418,7 +508,7 @@ class Flow(App):
     async def on_mount(self) -> None:
         # Dynamic localization for the built-in command palette
         self.COMMAND_PALETTE_PLACEHOLDER = i18n.t("placeholder_cmd")
-        
+
         self.log_widget = self.query_one("#feed-log", RichLog)
         self.log_widget.write(i18n.t("system_init"))
         
@@ -461,6 +551,56 @@ class Flow(App):
 
         # Start UI Loop
         asyncio.create_task(self.update_loop())
+        self.call_after_refresh(self._enable_default_focus_mode)
+
+    def _enable_default_focus_mode(self) -> None:
+        """Enable maximize mode for the main dashboard widget on startup."""
+        try:
+            bots_table = self.query_one("#bots-table", DataTable)
+            bots_table.focus()
+            self.screen.maximize(bots_table)
+        except Exception:
+            # Keep normal layout if focus/maximize is unavailable.
+            pass
+
+    def _localize_system_command(self, command: SystemCommand) -> SystemCommand:
+        """Localize known built-in command palette entries."""
+        if i18n.lang != "ru":
+            return command
+
+        title = getattr(command, "title", getattr(command, "name", ""))
+        help_text = getattr(command, "help", "")
+        callback = getattr(command, "callback", None)
+        discover = getattr(command, "discover", True)
+
+        translation = self._SYSTEM_COMMAND_TRANSLATIONS.get(title)
+        if not translation:
+            return command
+
+        return SystemCommand(
+            translation["ru_title"],
+            translation["ru_help"],
+            callback,
+            discover,
+        )
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        for command in super().get_system_commands(screen):
+            yield self._localize_system_command(command)
+
+    def _focus_command_palette_input(self) -> None:
+        """Ensure command palette input receives focus immediately after opening."""
+        if isinstance(self.screen, CommandPalette):
+            try:
+                self.screen.query_one(Input).focus()
+            except Exception:
+                # Keep default behavior if palette internals change.
+                pass
+
+    def action_command_palette(self) -> None:
+        """Open a localized command palette and force input focus."""
+        self.push_screen(CommandPalette(placeholder=i18n.t("placeholder_cmd")))
+        self.call_after_refresh(self._focus_command_palette_input)
 
     async def update_loop(self):
         while True:
