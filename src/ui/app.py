@@ -3,8 +3,9 @@ from textual.containers import Container, Vertical, Horizontal, ScrollableContai
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button, Select
 from textual.screen import ModalScreen, Screen
 from textual.command import CommandPalette
-from src.core.config import AccountConfig, ExchangeConfig
-from src.core.bot_manager import BotManager, BotInstance, StrategyState, create_exchange
+from src.core.config import AccountConfig, ExchangeConfig, SettingsProfile, StrategySettings, StrategySettingsOverride
+from src.core.bot_manager import BotManager, StrategyState, create_exchange
+from src.core.credentials import has_master_password, initialize_master_password
 from src.core.i18n import i18n
 from decimal import Decimal
 from typing import Iterable
@@ -16,16 +17,108 @@ from src.ui.env import is_mobile
 
 # --- Reusable UI ---
 
+def ui_t(key: str) -> str:
+    ru = {
+        "master_pwd_create_title": "Создайте мастер-пароль",
+        "master_pwd_enter_title": "Введите мастер-пароль",
+        "master_pwd_label": "Пароль",
+        "master_pwd_confirm_label": "Повторите пароль",
+        "master_pwd_create_btn": "Создать",
+        "master_pwd_unlock_btn": "Разблокировать",
+        "master_pwd_short": "Пароль должен быть минимум 6 символов",
+        "master_pwd_mismatch": "Пароли не совпадают",
+        "master_pwd_invalid": "Неверный мастер-пароль",
+        "master_pwd_unlock_failed": "Не удалось разблокировать конфиг: {error}",
+        "unlock_first": "Сначала разблокируйте приложение",
+    }
+    en = {
+        "master_pwd_create_title": "Create Master Password",
+        "master_pwd_enter_title": "Enter Master Password",
+        "master_pwd_label": "Password",
+        "master_pwd_confirm_label": "Confirm Password",
+        "master_pwd_create_btn": "Create",
+        "master_pwd_unlock_btn": "Unlock",
+        "master_pwd_short": "Password must be at least 6 characters",
+        "master_pwd_mismatch": "Passwords do not match",
+        "master_pwd_invalid": "Invalid master password",
+        "master_pwd_unlock_failed": "Failed to unlock config: {error}",
+        "unlock_first": "Unlock the app first",
+    }
+    table = ru if i18n.lang == "ru" else en
+    extra_ru = {
+        "profiles_tab": "Профили",
+        "settings_profiles": "Профили настроек",
+        "add_profile": "Добавить профиль",
+        "edit_profile": "Редактировать профиль",
+        "remove_profile": "Удалить профиль",
+        "profile_col": "Профиль",
+        "profile_id_col": "ID",
+        "profile_name_col": "Имя",
+        "symbol_col": "Символ",
+        "spread_col": "Спред (bps)",
+        "rebalance_col": "Ребаланс (с)",
+        "profile_add_title": "Добавить профиль",
+        "profile_edit_title": "Редактировать профиль",
+        "profile_id_label": "Profile ID",
+        "profile_name_label": "Profile Name",
+        "max_spread_label": "Max Spread (bps)",
+        "rebalance_label": "Rebalance Interval (sec)",
+        "invalid_profile_numbers": "Неверное числовое значение в профиле",
+        "profile_id_required": "Profile ID is required",
+        "profile_name_required": "Profile name is required",
+        "profile_added": "Профиль '{name}' добавлен",
+        "profile_updated": "Профиль '{name}' обновлен",
+        "profile_removed": "Профиль '{name}' удален",
+        "settings_profile_label": "Профиль настроек",
+        "select_profile_prompt": "Выберите профиль",
+        "target_override_label": "Переопределение объема (USD)",
+        "target_override_placeholder": "Пусто = значение из профиля",
+        "select_profile_required": "Выберите профиль настроек",
+    }
+    extra_en = {
+        "profiles_tab": "Profiles",
+        "settings_profiles": "Settings Profiles",
+        "add_profile": "Add Profile",
+        "edit_profile": "Edit Profile",
+        "remove_profile": "Remove Profile",
+        "profile_col": "Profile",
+        "profile_id_col": "ID",
+        "profile_name_col": "Name",
+        "symbol_col": "Symbol",
+        "spread_col": "Spread(bps)",
+        "rebalance_col": "Rebalance(s)",
+        "profile_add_title": "Add Profile",
+        "profile_edit_title": "Edit Profile",
+        "profile_id_label": "Profile ID",
+        "profile_name_label": "Profile Name",
+        "max_spread_label": "Max Spread (bps)",
+        "rebalance_label": "Rebalance Interval (sec)",
+        "invalid_profile_numbers": "Invalid numeric value in profile fields",
+        "profile_id_required": "Profile ID is required",
+        "profile_name_required": "Profile name is required",
+        "profile_added": "Profile '{name}' added",
+        "profile_updated": "Profile '{name}' updated",
+        "profile_removed": "Profile '{name}' removed",
+        "settings_profile_label": "Settings Profile",
+        "select_profile_prompt": "Select profile",
+        "target_override_label": "Target Size Override (USD)",
+        "target_override_placeholder": "Leave blank to use profile value",
+        "select_profile_required": "Select a settings profile",
+    }
+    extra = extra_ru if i18n.lang == "ru" else extra_en
+    return extra.get(key, table.get(key, key))
+
+
 class StatusPill(Static):
     DEFAULT_CSS = """
     StatusPill {
         width: 1fr;
-        height: 3;
+        height: 4;
         padding: 0 1;
         margin: 0 1 0 0;
-        background: $surface;
+        background: #1f2937;
         color: $text;
-        border: round $primary-background;
+        border: round #334155;
     }
     """
     def __init__(self, label: str, value: str = "--", **kwargs):
@@ -95,6 +188,17 @@ class SettingsTab(ScrollableContainer):
     def on_mount(self) -> None:
         if is_mobile():
             self.query_one("#setting-refresh", Input).focus()
+
+
+class ProfilesTab(ScrollableContainer):
+    """Manage strategy profiles."""
+    def compose(self) -> ComposeResult:
+        yield Label(ui_t("settings_profiles"), classes="section-title")
+        yield DataTable(id="profiles-table")
+        with Horizontal(classes="controls"):
+            yield Button(ui_t("add_profile"), id="btn-add-profile", variant="primary")
+            yield Button(ui_t("edit_profile"), id="btn-edit-profile", disabled=True)
+            yield Button(ui_t("remove_profile"), id="btn-remove-profile", variant="error", disabled=True)
 
 
 class ExchangeConfigForm(Vertical):
@@ -199,11 +303,160 @@ class ExchangeConfigForm(Vertical):
         return ExchangeConfig(exchange_type=ex_type, params=params)
 
 
+class MasterPasswordScreen(ModalScreen[str | None]):
+    """Screen for creating or entering master password."""
+    def __init__(self, create_mode: bool, **kwargs):
+        super().__init__(**kwargs)
+        self.create_mode = create_mode
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            title = ui_t("master_pwd_create_title") if self.create_mode else ui_t("master_pwd_enter_title")
+            yield Label(title, id="dialog-title")
+
+            with Vertical(classes="input-group"):
+                yield Label(ui_t("master_pwd_label"), classes="field-label")
+                yield Input(password=True, id="master-password")
+
+            if self.create_mode:
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("master_pwd_confirm_label"), classes="field-label")
+                    yield Input(password=True, id="master-password-confirm")
+
+            with Horizontal(id="dialog-buttons"):
+                yield Button(i18n.t("cancel"), id="btn-master-cancel", variant="error")
+                action_label = ui_t("master_pwd_create_btn") if self.create_mode else ui_t("master_pwd_unlock_btn")
+                yield Button(action_label, id="btn-master-submit", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#master-password", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-master-cancel":
+            self.dismiss(None)
+            return
+
+        password = self.query_one("#master-password", Input).value
+        if len(password) < 6:
+            self.app.notify(ui_t("master_pwd_short"), severity="error")
+            return
+
+        if self.create_mode:
+            confirm = self.query_one("#master-password-confirm", Input).value
+            if password != confirm:
+                self.app.notify(ui_t("master_pwd_mismatch"), severity="error")
+                return
+
+        self.dismiss(password)
+
+
+class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
+    """Create or edit strategy profile."""
+    def __init__(self, profile: SettingsProfile | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.profile = profile
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            title = ui_t("profile_edit_title") if self.profile else ui_t("profile_add_title")
+            yield Label(title, id="dialog-title")
+
+            with ScrollableContainer():
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("profile_id_label"), classes="field-label")
+                    yield Input(
+                        id="profile-id",
+                        placeholder="e.g. scalp",
+                        value=self.profile.id if self.profile else "",
+                        disabled=self.profile is not None,
+                    )
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("profile_name_label"), classes="field-label")
+                    yield Input(
+                        id="profile-name",
+                        placeholder="e.g. Scalping",
+                        value=self.profile.name if self.profile else "",
+                    )
+                with Vertical(classes="input-group"):
+                    yield Label(i18n.t("target_size_usd"), classes="field-label")
+                    yield Input(
+                        id="profile-target-size",
+                        placeholder="1000",
+                        value=str(self.profile.settings.target_size_usd) if self.profile else "1000",
+                    )
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("symbol_col"), classes="field-label")
+                    yield Input(
+                        id="profile-symbol",
+                        placeholder="BTC-PERP",
+                        value=self.profile.settings.symbol if self.profile else "BTC-PERP",
+                    )
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("max_spread_label"), classes="field-label")
+                    yield Input(
+                        id="profile-max-spread",
+                        placeholder="10",
+                        value=str(self.profile.settings.max_spread_bps) if self.profile else "10",
+                    )
+                with Vertical(classes="input-group"):
+                    yield Label(ui_t("rebalance_label"), classes="field-label")
+                    yield Input(
+                        id="profile-rebalance",
+                        placeholder="30",
+                        value=str(self.profile.settings.rebalance_interval_sec) if self.profile else "30",
+                    )
+
+            with Horizontal(id="dialog-buttons"):
+                yield Button(i18n.t("cancel"), id="btn-profile-cancel", variant="error")
+                yield Button(i18n.t("save"), id="btn-profile-save", variant="primary")
+
+    def on_mount(self) -> None:
+        target = "#profile-name" if self.profile else "#profile-id"
+        self.query_one(target, Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-profile-cancel":
+            self.dismiss(None)
+            return
+
+        try:
+            profile_id = self.query_one("#profile-id", Input).value.strip()
+            name = self.query_one("#profile-name", Input).value.strip()
+            target_size = float(self.query_one("#profile-target-size", Input).value.strip())
+            symbol = self.query_one("#profile-symbol", Input).value.strip() or "BTC-PERP"
+            max_spread = float(self.query_one("#profile-max-spread", Input).value.strip())
+            rebalance = int(self.query_one("#profile-rebalance", Input).value.strip())
+        except ValueError:
+            self.app.notify(ui_t("invalid_profile_numbers"), severity="error")
+            return
+
+        if not profile_id:
+            self.app.notify(ui_t("profile_id_required"), severity="error")
+            return
+        if not name:
+            self.app.notify(ui_t("profile_name_required"), severity="error")
+            return
+
+        profile = SettingsProfile(
+            id=profile_id,
+            name=name,
+            settings=StrategySettings(
+                target_size_usd=target_size,
+                symbol=symbol,
+                max_spread_bps=max_spread,
+                rebalance_interval_sec=rebalance,
+            ),
+        )
+        self.dismiss(profile)
+
+
 class AccountSettingsScreen(ModalScreen[AccountConfig]):
     """Screen for adding or editing an account."""
-    def __init__(self, account: AccountConfig | None = None, **kwargs):
+    def __init__(self, profiles: list[SettingsProfile], account: AccountConfig | None = None, **kwargs):
         super().__init__(**kwargs)
+        self.profiles = profiles
         self.account = account
+        self.default_profile_id = profiles[0].id if profiles else "default"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -221,11 +474,24 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                             value=self.account.name if self.account else ""
                         )
                     with Vertical(classes="input-group"):
-                        yield Label(i18n.t("target_size_usd"), classes="field-label")
+                        yield Label(ui_t("settings_profile_label"), classes="field-label")
+                        profile_options = [(p.name, p.id) for p in self.profiles]
+                        yield Select(
+                            profile_options,
+                            prompt=ui_t("select_profile_prompt"),
+                            id="acc-profile",
+                            value=self.account.settings_profile_id if self.account else self.default_profile_id,
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("target_override_label"), classes="field-label")
                         yield Input(
-                            placeholder="1000", 
+                            placeholder=ui_t("target_override_placeholder"),
                             id="acc-size", 
-                            value=str(self.account.target_size_usd) if self.account else "1000"
+                            value=(
+                                str(self.account.settings_override.target_size_usd)
+                                if self.account and self.account.settings_override.target_size_usd is not None
+                                else ""
+                            )
                         )
                 
                 ex_a_init = self.account.exchanges[0] if self.account and len(self.account.exchanges) > 0 else None
@@ -253,9 +519,13 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
 
                 try:
                     size_val = self.query_one("#acc-size", Input).value
-                    size = float(size_val or "1000")
+                    size = float(size_val) if size_val.strip() else None
                 except ValueError:
                     self.app.notify("Invalid target size", severity="error")
+                    return
+                profile_id = self.query_one("#acc-profile", Select).value
+                if not isinstance(profile_id, str) or not profile_id:
+                    self.app.notify(ui_t("select_profile_required"), severity="error")
                     return
                 
                 ex_a_form = self.query_one("#ex-a", ExchangeConfigForm)
@@ -293,7 +563,8 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 # Create new config or update existing
                 result = AccountConfig(
                     name=name,
-                    target_size_usd=size,
+                    settings_profile_id=profile_id,
+                    settings_override=StrategySettingsOverride(target_size_usd=size),
                     exchanges=[ex_a_config, ex_b_config],
                     enabled=self.account.enabled if self.account else True
                 )
@@ -331,66 +602,118 @@ class Flow(App):
     
     CSS = """
     Screen {
-        background: $surface-darken-1;
+        background: #0b1220;
         color: $text;
     }
+    *:focus {
+        outline: none;
+    }
     Header {
-        background: $primary-darken-1;
+        background: #0f172a;
+        border-bottom: solid #334155;
         color: $text;
     }
     Footer {
-        background: $surface-darken-2;
+        background: #111827;
+        border-top: solid #334155;
         color: $text-muted;
     }
     TabbedContent {
-        padding: 0 1;
+        padding: 1 1 0 1;
+        background: transparent;
     }
     TabPane {
-        padding: 0 0 1 0;
+        padding: 1;
+        border: round #334155;
+        background: #111827;
     }
     #stats-row, #stats-summary {
         height: auto;
-        min-height: 3;
-        margin: 1 0;
+        min-height: 4;
+        margin: 0 0 1 0;
     }
     .section-title {
-        margin: 1 0;
+        margin: 1 0 0 0;
         text-style: bold;
-        color: $accent;
+        color: #93c5fd;
+        background: #0f172a;
+        padding: 0 1;
+        border-left: thick #3b82f6;
     }
     RichLog {
         height: 1fr;
-        border: round $primary;
-        background: $surface;
+        border: round #334155;
+        background: #0f172a;
         padding: 0 1;
+        margin-top: 1;
     }
     DataTable {
         height: auto;
         min-height: 10;
-        border: round $primary;
-        background: $surface;
+        border: round #334155;
+        background: #0f172a;
+        margin-top: 1;
     }
     .controls {
         height: auto;
         margin-top: 1;
         align: left middle;
+        border-top: solid #334155;
+        padding-top: 1;
     }
-    Button {
+    Button,
+    Button.-default,
+    Button.-primary,
+    Button.-error {
         margin-right: 1;
         min-width: 16;
+        height: 3;
+        padding: 0 1;
+        border: round #475569;
+        outline: none;
+        background: transparent;
+        color: #e5e7eb;
+    }
+    Button.-primary {
+        border: round #2563eb;
+        background: transparent;
+        color: #93c5fd;
+        text-style: bold;
+    }
+    Button.-error {
+        border: round #dc2626;
+        background: transparent;
+        color: #fca5a5;
+        text-style: bold;
+    }
+    Button:hover,
+    Button.-default:hover,
+    Button.-primary:hover,
+    Button.-error:hover {
+        background: #1e293b;
+    }
+    Button:focus,
+    Button.-default:focus,
+    Button.-primary:focus,
+    Button.-error:focus {
+        outline: none;
+        border: round #93c5fd;
+        background: #1e293b;
     }
     Input, Select {
         margin: 0 0 1 0;
+        border: round #334155;
+        background: #0f172a;
     }
     .field-label {
         color: $text-muted;
         margin-bottom: 0;
     }
     .settings-card {
-        border: round $primary-background;
+        border: round #334155;
         padding: 1 1;
         margin: 0 0 1 0;
-        background: $surface;
+        background: #111827;
         width: 1fr;
         max-width: 60;
     }
@@ -400,9 +723,9 @@ class Flow(App):
     }
 
     #dialog {
-        padding: 1 1;
-        background: $surface;
-        border: round $primary;
+        padding: 1 2;
+        background: #111827;
+        border: round #3b82f6;
         width: 95%;
         height: auto;
         max-height: 45;
@@ -412,7 +735,7 @@ class Flow(App):
         text-align: center;
         text-style: bold;
         margin-bottom: 1;
-        color: $primary;
+        color: #bfdbfe;
     }
     .dialog-row {
         height: auto;
@@ -424,12 +747,12 @@ class Flow(App):
         height: auto;
     }
     .input-group {
-        border: round $primary-background;
-        background: $surface-lighten-1;
+        border: round #334155;
+        background: #0f172a;
     }
     #ex-row {
         height: auto;
-        border-top: solid $primary-background;
+        border-top: solid #334155;
         margin-top: 1;
         padding-top: 1;
     }
@@ -467,8 +790,8 @@ class Flow(App):
         width: 1fr;
         height: auto;
         padding: 0 1 1 1;
-        border: round $primary-background;
-        background: $surface;
+        border: round #334155;
+        background: #0f172a;
     }
     #accounts-config-table, #bots-table, #stats-table {
         margin-bottom: 1;
@@ -477,7 +800,7 @@ class Flow(App):
 
     def __init__(self):
         super().__init__()
-        self.manager = BotManager()
+        self.manager: BotManager | None = None
         # Create logs directory if not exists
         os.makedirs("logs", exist_ok=True)
         self.log_file = open("logs/debug.log", "a", encoding="utf-8")
@@ -499,6 +822,8 @@ class Flow(App):
                 yield DashboardTab()
             with TabPane(i18n.t("accounts"), id="tab-accounts"):
                 yield AccountsTab()
+            with TabPane(ui_t("profiles_tab"), id="tab-profiles"):
+                yield ProfilesTab()
             with TabPane(i18n.t("statistics"), id="tab-statistics"):
                 yield StatisticsTab()
             with TabPane(i18n.t("settings"), id="tab-settings"):
@@ -525,13 +850,13 @@ class Flow(App):
         config_table = self.query_one("#accounts-config-table", DataTable)
         config_table.add_columns(
             i18n.t("name"), 
+            ui_t("profile_col"),
             i18n.t("target_size"), 
             "Exchange A", 
             "Exchange B",
             i18n.t("balance")
         )
         config_table.cursor_type = "row"
-        self._refresh_accounts_table()
 
         # Setup Statistics Table
         stats_table = self.query_one("#stats-table", DataTable)
@@ -543,15 +868,53 @@ class Flow(App):
             i18n.t("status")
         )
 
-        # Start Manager (Safe start)
-        try:
-            await self.manager.start_all()
-        except Exception as e:
-            self.log_message(f"Startup Error: {str(e)}", "red")
+        profiles_table = self.query_one("#profiles-table", DataTable)
+        profiles_table.add_columns(
+            ui_t("profile_id_col"),
+            ui_t("profile_name_col"),
+            i18n.t("target_size"),
+            ui_t("symbol_col"),
+            ui_t("spread_col"),
+            ui_t("rebalance_col"),
+        )
+        profiles_table.cursor_type = "row"
 
-        # Start UI Loop
-        asyncio.create_task(self.update_loop())
-        self.call_after_refresh(self._enable_default_focus_mode)
+        env_password = os.getenv("FLOW_MASTER_PASSWORD", "").strip()
+        if env_password:
+            asyncio.create_task(self._unlock_with_password(env_password))
+        else:
+            self.push_screen(
+                MasterPasswordScreen(create_mode=not has_master_password()),
+                self._handle_master_password_result,
+            )
+
+    def _handle_master_password_result(self, password: str | None) -> None:
+        if password is None:
+            self.exit()
+            return
+        asyncio.create_task(self._unlock_with_password(password))
+
+    async def _unlock_with_password(self, password: str) -> None:
+        try:
+            initialize_master_password(password)
+            self.manager = BotManager()
+            self._refresh_accounts_table()
+            self._refresh_profiles_table()
+            await self.manager.start_all()
+            asyncio.create_task(self.update_loop())
+            self.call_after_refresh(self._enable_default_focus_mode)
+        except ValueError:
+            self.notify(ui_t("master_pwd_invalid"), severity="error")
+            self.push_screen(
+                MasterPasswordScreen(create_mode=not has_master_password()),
+                self._handle_master_password_result,
+            )
+        except Exception as e:
+            self.notify(ui_t("master_pwd_unlock_failed").format(error=e), severity="error")
+            self.push_screen(
+                MasterPasswordScreen(create_mode=not has_master_password()),
+                self._handle_master_password_result,
+            )
 
     def _enable_default_focus_mode(self) -> None:
         """Enable maximize mode for the main dashboard widget on startup."""
@@ -605,6 +968,9 @@ class Flow(App):
     async def update_loop(self):
         while True:
             try:
+                if self.manager is None:
+                    await asyncio.sleep(0.5)
+                    continue
                 # 0. Smart Balance Update (handles 1s or 10m internally)
                 tasks = [bot.update_balances() for bot in self.manager.bots]
                 if tasks:
@@ -663,7 +1029,8 @@ class Flow(App):
                     bal_str = f"${bot.bal_a:,.2f} / ${bot.bal_b:,.2f}"
                     config_table.add_row(
                         bot.config.name, 
-                        str(bot.config.target_size_usd),
+                        self.manager.get_profile_name(bot.config.settings_profile_id),
+                        str(bot.settings.target_size_usd),
                         fmt_ex(ex_a),
                         fmt_ex(ex_b),
                         bal_str,
@@ -709,6 +1076,10 @@ class Flow(App):
             await asyncio.sleep(1.0)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if self.manager is None:
+            self.notify(ui_t("unlock_first"), severity="warning")
+            return
+
         if event.button.id == "btn-add-account":
             def add_account_callback(new_acc: AccountConfig | None) -> None:
                 if new_acc:
@@ -716,7 +1087,7 @@ class Flow(App):
                     self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
                     self._refresh_accounts_table()
             
-            self.push_screen(AccountSettingsScreen(), add_account_callback)
+            self.push_screen(AccountSettingsScreen(self.manager.config.settings_profiles), add_account_callback)
             
         elif event.button.id == "btn-edit-account":
             table = self.query_one("#accounts-config-table", DataTable)
@@ -730,7 +1101,10 @@ class Flow(App):
                         self.log_widget.write(f"[yellow]{i18n.t('edit_account')}: {new_acc.name}[/]")
                         self._refresh_accounts_table()
                 
-                self.push_screen(AccountSettingsScreen(account=acc), edit_account_callback)
+                self.push_screen(
+                    AccountSettingsScreen(self.manager.config.settings_profiles, account=acc),
+                    edit_account_callback,
+                )
 
         elif event.button.id == "btn-remove-account":
             table = self.query_one("#accounts-config-table", DataTable)
@@ -740,10 +1114,58 @@ class Flow(App):
                 self.log_widget.write(f"[red]{i18n.t('remove_selected')}[/]")
                 self._refresh_accounts_table()
 
+        elif event.button.id == "btn-add-profile":
+            def add_profile_callback(profile: SettingsProfile | None) -> None:
+                if profile is None:
+                    return
+                try:
+                    self.manager.add_profile(profile)
+                    self.notify(ui_t("profile_added").format(name=profile.name), severity="information")
+                    self._refresh_profiles_table()
+                    self._refresh_accounts_table()
+                except ValueError as e:
+                    self.notify(str(e), severity="error")
+
+            self.push_screen(ProfileSettingsScreen(), add_profile_callback)
+
+        elif event.button.id == "btn-edit-profile":
+            profiles_table = self.query_one("#profiles-table", DataTable)
+            if profiles_table.cursor_row is not None:
+                idx = profiles_table.cursor_row
+                profile = self.manager.config.settings_profiles[idx]
+
+                def edit_profile_callback(updated: SettingsProfile | None) -> None:
+                    if updated is None:
+                        return
+                    try:
+                        self.manager.update_profile(profile.id, updated)
+                        self.notify(ui_t("profile_updated").format(name=updated.name), severity="information")
+                        self._refresh_profiles_table()
+                        self._refresh_accounts_table()
+                    except ValueError as e:
+                        self.notify(str(e), severity="error")
+
+                self.push_screen(ProfileSettingsScreen(profile=profile), edit_profile_callback)
+
+        elif event.button.id == "btn-remove-profile":
+            profiles_table = self.query_one("#profiles-table", DataTable)
+            if profiles_table.cursor_row is not None:
+                idx = profiles_table.cursor_row
+                profile = self.manager.config.settings_profiles[idx]
+                try:
+                    self.manager.remove_profile(profile.id)
+                    self.notify(ui_t("profile_removed").format(name=profile.name), severity="information")
+                    self._refresh_profiles_table()
+                    self._refresh_accounts_table()
+                except ValueError as e:
+                    self.notify(str(e), severity="error")
+
     def _refresh_accounts_table(self):
         """Force immediate refresh of the accounts table with current data."""
         config_table = self.query_one("#accounts-config-table", DataTable)
         config_table.clear()
+        if self.manager is None:
+            return
         
         # We need to map config accounts to bots to get cached balances
         for idx, acc in enumerate(self.manager.config.accounts):
@@ -765,17 +1187,40 @@ class Flow(App):
 
             config_table.add_row(
                 acc.name, 
-                str(acc.target_size_usd),
+                self.manager.get_profile_name(acc.settings_profile_id),
+                str(self.manager.resolve_account_settings(acc).target_size_usd),
                 fmt_ex(ex_a),
                 fmt_ex(ex_b),
                 bal_str,
                 key=str(idx)
             )
 
+    def _refresh_profiles_table(self):
+        profiles_table = self.query_one("#profiles-table", DataTable)
+        profiles_table.clear()
+        if self.manager is None:
+            return
+
+        for idx, profile in enumerate(self.manager.config.settings_profiles):
+            profiles_table.add_row(
+                profile.id,
+                profile.name,
+                str(profile.settings.target_size_usd),
+                profile.settings.symbol,
+                str(profile.settings.max_spread_bps),
+                str(profile.settings.rebalance_interval_sec),
+                key=str(idx),
+            )
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        if self.manager is None:
+            return
         if event.data_table.id == "accounts-config-table":
             self.query_one("#btn-remove-account").disabled = False
             self.query_one("#btn-edit-account").disabled = False
+        elif event.data_table.id == "profiles-table":
+            self.query_one("#btn-edit-profile").disabled = False
+            self.query_one("#btn-remove-profile").disabled = False
 
 if __name__ == "__main__":
     app = Flow()

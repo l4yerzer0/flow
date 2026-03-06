@@ -1,35 +1,54 @@
 import sys
 import os
 import subprocess
-import importlib.util
+from pathlib import Path
+from importlib import metadata
+
+def _read_required_distributions(requirements_path: Path) -> list[str]:
+    """Read distribution names from requirements.txt (ignores comments/flags)."""
+    packages: list[str] = []
+    for raw in requirements_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("-"):
+            continue
+
+        # Keep only package/distribution name before any version specifier or marker.
+        for sep in ("==", ">=", "<=", "~=", "!=", ">", "<", ";"):
+            if sep in line:
+                line = line.split(sep, 1)[0].strip()
+        if "[" in line:
+            line = line.split("[", 1)[0].strip()
+
+        if line:
+            packages.append(line)
+    return packages
 
 def check_and_install_dependencies():
-    """Checks for required packages and installs them if missing."""
-    required_packages = ['textual', 'aiohttp', 'pydantic', 'dotenv']
-    missing = []
+    """Checks all requirements distributions and installs if something is missing."""
+    requirements_path = Path(__file__).with_name("requirements.txt")
+    if not requirements_path.exists():
+        print("requirements.txt not found. Skipping dependency auto-install.")
+        return
 
-    for package in required_packages:
-        # Map import name to package name if they differ (e.g. dotenv -> python-dotenv)
-        import_name = package
-        if package == 'dotenv':
-            import_name = 'dotenv' # actually import dotenv checks for python-dotenv usually
-        
-        if importlib.util.find_spec(import_name) is None:
-            missing.append(package)
+    required_distributions = _read_required_distributions(requirements_path)
+    missing: list[str] = []
+
+    for dist_name in required_distributions:
+        try:
+            metadata.version(dist_name)
+        except metadata.PackageNotFoundError:
+            missing.append(dist_name)
 
     if missing:
         print(f"Missing dependencies detected: {', '.join(missing)}")
         print("Installing dependencies from requirements.txt...")
         try:
             # Use sys.executable to ensure we install in the CURRENT python environment (e.g. py -3.12)
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)])
             print("Dependencies installed successfully.\n")
         except subprocess.CalledProcessError as e:
             print(f"Error installing dependencies: {e}")
             sys.exit(1)
-    else:
-        # Quick check passed, but let's ensure specific versions aren't broken
-        pass
 
 if __name__ == "__main__":
     # 1. Auto-install dependencies before importing app logic
