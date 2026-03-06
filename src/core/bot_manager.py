@@ -1,16 +1,22 @@
 import asyncio
-import logging
-from typing import List, Dict
-from src.core.config import GlobalConfig, AccountConfig, ExchangeConfig
+from decimal import Decimal
+from typing import List
+from src.core.config import (
+    GlobalConfig,
+    AccountConfig,
+    ExchangeConfig,
+    StrategySettings,
+    SettingsProfile,
+)
 from src.exchanges.base import ExchangeBase
-from src.exchanges.mock import MockExchange
 from src.exchanges.pacifica import PacificaExchange
+from src.exchanges.variational import VariationalExchange
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
 
 def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> ExchangeBase:
     """Factory to create exchange instances based on config."""
     name = f"{config.exchange_type.capitalize()} {index} ({account_name})"
-    
+
     if config.exchange_type == "pacifica":
         return PacificaExchange(
             name=name,
@@ -18,36 +24,59 @@ def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> Ex
             api_secret=config.params.get("private_key", ""),
             subaccount_id="0" # Default as requested
         )
-    
+
     if config.exchange_type == "variational":
-        raise NotImplementedError("Variational exchange is not implemented yet")
-        
-    # Default to Mock
-    return MockExchange(name)
+        return VariationalExchange(
+            name=name,
+            api_key=config.params.get("public_key", "") or config.params.get("address", ""),
+            api_secret=config.params.get("private_key", "")
+        )
+
+    raise ValueError(f"Unsupported exchange type: {config.exchange_type}")
 
 class BotInstance:
     """Represents a single running strategy (one account)."""
-    def __init__(self, config: AccountConfig):
+    def __init__(self, config: AccountConfig, settings: StrategySettings):
         self.config = config
-        
-        # Ensure we have at least 2 exchanges configured
+        self.settings = settings
+
+        # We require exactly two real exchange configs.
         if len(config.exchanges) < 2:
-            # Fallback for old configs or incomplete ones
-            self.ex_a = MockExchange(f"Mock A ({config.name})")
-            self.ex_b = MockExchange(f"Mock B ({config.name})")
-        else:
-            self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
-            self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
+            raise ValueError(f"Account '{config.name}' must have 2 exchanges configured")
+
+        self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
+        self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
         
-        # Override mock balance with a realistic initial for demo
-        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = 10000.0
-        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = 10000.0
+        # Balance Cache
+        self.bal_a = Decimal("0.0")
+        self.bal_b = Decimal("0.0")
+        self.last_bal_update = 0.0
+
+        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = Decimal("10000.0")
+        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = Decimal("10000.0")
 
         self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
-        self.strategy.target_size_usd = config.target_size_usd
+        self.strategy.target_size_usd = Decimal(str(settings.target_size_usd))
+        self.strategy.symbol = settings.symbol
         
         self.running = False
         self.task: asyncio.Task = None
+
+    async def update_balances(self, force=False):
+        """Smart update balances: fast if trading, slow if idle/disabled."""
+        import time
+        now = time.time()
+        
+        # Interval: 1s if active, 600s (10m) if idle or disabled
+        interval = 1.0 if (self.running and self.strategy.state != StrategyState.IDLE) else 600.0
+        
+        if force or (now - self.last_bal_update > interval):
+            # No try-except here, let errors bubble up to UI update loop
+            self.bal_a, self.bal_b = await asyncio.gather(
+                self.ex_a.get_balance(),
+                self.ex_b.get_balance()
+            )
+            self.last_bal_update = now
 
     async def start(self):
         if self.running: return
@@ -77,33 +106,66 @@ class BotManager:
         self.config_path = config_path
         self.config = GlobalConfig.load(config_path)
         self.bots: List[BotInstance] = []
-
-        # If no accounts exist, create a default mock one for first run
-        if not self.config.accounts:
-            default_acc = AccountConfig(
-                name="Demo Account", 
-                target_size_usd=1000.0,
-                exchanges=[
-                    ExchangeConfig(exchange_type="mock"),
-                    ExchangeConfig(exchange_type="mock")
-                ]
-            )
-            self.config.accounts.append(default_acc)
-            self.config.save()
+        self._ensure_default_profiles()
 
         self._initialize_bots()
+
+    def _ensure_default_profiles(self):
+        if self.config.settings_profiles:
+            return
+
+        self.config.settings_profiles = [
+            SettingsProfile(
+                id="default",
+                name="Default",
+                settings=StrategySettings(
+                    target_size_usd=1000.0,
+                    symbol="BTC-PERP",
+                    max_spread_bps=10.0,
+                    rebalance_interval_sec=30,
+                ),
+            ),
+            SettingsProfile(
+                id="alt",
+                name="Alt Profile",
+                settings=StrategySettings(
+                    target_size_usd=2000.0,
+                    symbol="BTC-PERP",
+                    max_spread_bps=20.0,
+                    rebalance_interval_sec=15,
+                ),
+            ),
+        ]
+        self.config.save()
+
+    def get_profile(self, profile_id: str) -> SettingsProfile:
+        return next(
+            (p for p in self.config.settings_profiles if p.id == profile_id),
+            self.config.settings_profiles[0],
+        )
+
+    def get_profile_name(self, profile_id: str) -> str:
+        profile = next((p for p in self.config.settings_profiles if p.id == profile_id), None)
+        if profile is None:
+            return f"{profile_id} (?)"
+        return profile.name
+
+    def resolve_account_settings(self, account: AccountConfig) -> StrategySettings:
+        profile = self.get_profile(account.settings_profile_id)
+        return account.settings_override.apply_to(profile.settings)
 
     def _initialize_bots(self):
         self.bots = []
         for acc in self.config.accounts:
-            if acc.enabled:
-                try:
-                    self.bots.append(BotInstance(acc))
-                except Exception as e:
-                    print(f"Failed to initialize bot for {acc.name}: {e}")
+            try:
+                # We create instances for ALL accounts to track balances
+                self.bots.append(BotInstance(acc, self.resolve_account_settings(acc)))
+            except Exception as e:
+                print(f"Failed to initialize bot for {acc.name}: {e}")
 
     async def start_all(self):
-        tasks = [bot.start() for bot in self.bots]
+        # Only start the strategy loop for enabled accounts
+        tasks = [bot.start() for bot in self.bots if bot.config.enabled]
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -112,13 +174,61 @@ class BotManager:
         if tasks:
             await asyncio.gather(*tasks)
 
+    async def reload_all(self):
+        """Reload all bot instances after config/profile changes."""
+        await self.stop_all()
+        self._initialize_bots()
+        await self.start_all()
+
+    def add_profile(self, profile: SettingsProfile):
+        if any(p.id == profile.id for p in self.config.settings_profiles):
+            raise ValueError(f"Profile id '{profile.id}' already exists")
+        self.config.settings_profiles.append(profile)
+        self.config.save()
+        asyncio.create_task(self.reload_all())
+
+    def update_profile(self, profile_id: str, updated: SettingsProfile):
+        idx = next((i for i, p in enumerate(self.config.settings_profiles) if p.id == profile_id), None)
+        if idx is None:
+            raise ValueError("Profile not found")
+
+        if updated.id != profile_id and any(p.id == updated.id for p in self.config.settings_profiles):
+            raise ValueError(f"Profile id '{updated.id}' already exists")
+
+        self.config.settings_profiles[idx] = updated
+        for account in self.config.accounts:
+            if account.settings_profile_id == profile_id:
+                account.settings_profile_id = updated.id
+
+        self.config.save()
+        asyncio.create_task(self.reload_all())
+
+    def remove_profile(self, profile_id: str):
+        if len(self.config.settings_profiles) <= 1:
+            raise ValueError("At least one profile must remain")
+
+        idx = next((i for i, p in enumerate(self.config.settings_profiles) if p.id == profile_id), None)
+        if idx is None:
+            raise ValueError("Profile not found")
+
+        remaining = [p for p in self.config.settings_profiles if p.id != profile_id]
+        fallback_profile_id = remaining[0].id
+
+        for account in self.config.accounts:
+            if account.settings_profile_id == profile_id:
+                account.settings_profile_id = fallback_profile_id
+
+        self.config.settings_profiles.pop(idx)
+        self.config.save()
+        asyncio.create_task(self.reload_all())
+
     def add_account(self, account: AccountConfig):
         self.config.accounts.append(account)
         self.config.save()
         # Create and start new bot instance
         if account.enabled:
             try:
-                new_bot = BotInstance(account)
+                new_bot = BotInstance(account, self.resolve_account_settings(account))
                 self.bots.append(new_bot)
                 asyncio.create_task(new_bot.start())
             except Exception as e:
@@ -149,7 +259,7 @@ class BotManager:
             elif new_config.enabled:
                 # If bot wasn't running (e.g. error before), try starting it now
                 try:
-                    new_bot = BotInstance(new_config)
+                    new_bot = BotInstance(new_config, self.resolve_account_settings(new_config))
                     self.bots.append(new_bot)
                     asyncio.create_task(new_bot.start())
                 except Exception:
@@ -159,7 +269,7 @@ class BotManager:
         old_bot = self.bots[bot_idx]
         await old_bot.stop()
         try:
-            new_bot = BotInstance(new_config)
+            new_bot = BotInstance(new_config, self.resolve_account_settings(new_config))
             self.bots[bot_idx] = new_bot
             await new_bot.start()
         except Exception as e:
