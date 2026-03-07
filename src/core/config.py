@@ -11,16 +11,10 @@ class ExchangeConfig(BaseModel):
 
 class StrategySettings(BaseModel):
     target_size_usd: float = 1000.0
-    symbol: str = "BTC-PERP"
-    max_spread_bps: float = 10.0
-    rebalance_interval_sec: int = 30
 
 
 class StrategySettingsOverride(BaseModel):
     target_size_usd: Optional[float] = None
-    symbol: Optional[str] = None
-    max_spread_bps: Optional[float] = None
-    rebalance_interval_sec: Optional[int] = None
 
     def apply_to(self, base: StrategySettings) -> StrategySettings:
         data = base.model_dump()

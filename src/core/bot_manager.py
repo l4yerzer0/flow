@@ -11,6 +11,7 @@ from src.core.config import (
 from src.exchanges.base import ExchangeBase
 from src.exchanges.pacifica import PacificaExchange
 from src.exchanges.variational import VariationalExchange
+from src.exchanges.market_universe import build_common_market_universe
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
 
 def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> ExchangeBase:
@@ -39,6 +40,8 @@ class BotInstance:
     def __init__(self, config: AccountConfig, settings: StrategySettings):
         self.config = config
         self.settings = settings
+        self.ex_type_a = config.exchanges[0].exchange_type if len(config.exchanges) > 0 else ""
+        self.ex_type_b = config.exchanges[1].exchange_type if len(config.exchanges) > 1 else ""
 
         # We require exactly two real exchange configs.
         if len(config.exchanges) < 2:
@@ -51,13 +54,20 @@ class BotInstance:
         self.bal_a = Decimal("0.0")
         self.bal_b = Decimal("0.0")
         self.last_bal_update = 0.0
-
-        if hasattr(self.ex_a, 'balance'): self.ex_a.balance = Decimal("10000.0")
-        if hasattr(self.ex_b, 'balance'): self.ex_b.balance = Decimal("10000.0")
+        self.assets_a: list[str] = []
+        self.assets_b: list[str] = []
+        self.common_assets: list[str] = []
+        self.last_markets_update = 0.0
+        
+        # Statistics Cache
+        self.points_a = Decimal("0.0")
+        self.points_b = Decimal("0.0")
+        self.vols_a = {"24h": Decimal("0.0"), "all_time": Decimal("0.0")}
+        self.vols_b = {"24h": Decimal("0.0"), "all_time": Decimal("0.0")}
+        self.last_stats_update = 0.0
 
         self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
         self.strategy.target_size_usd = Decimal(str(settings.target_size_usd))
-        self.strategy.symbol = settings.symbol
         
         self.running = False
         self.task: asyncio.Task = None
@@ -78,13 +88,68 @@ class BotInstance:
             )
             self.last_bal_update = now
 
-    async def start(self):
+    async def update_statistics(self, force=False):
+        """Update points and volumes (run every 10m)."""
+        import time
+        now = time.time()
+        
+        interval = 600.0 # 10m
+        
+        if force or (now - self.last_stats_update > interval):
+            try:
+                self.points_a, self.points_b, self.vols_a, self.vols_b = await asyncio.gather(
+                    self.ex_a.get_points(),
+                    self.ex_b.get_points(),
+                    self.ex_a.get_volumes(),
+                    self.ex_b.get_volumes()
+                )
+                self.last_stats_update = now
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to update stats for {self.config.name}: {e}")
+
+    async def update_market_universe(
+        self,
+        force: bool = False,
+        shared_markets_by_exchange: dict[str, list[str]] | None = None,
+    ):
+        """Refresh available markets and intersection for hedgeable assets."""
+        import time
+        now = time.time()
+        interval = 300.0  # 5 min
+        if not force and now - self.last_markets_update <= interval:
+            return
+
+        if shared_markets_by_exchange is not None:
+            assets_a = shared_markets_by_exchange.get(self.ex_type_a, [])
+            assets_b = shared_markets_by_exchange.get(self.ex_type_b, [])
+            self.assets_a = sorted(set(assets_a))
+            self.assets_b = sorted(set(assets_b))
+            self.common_assets = sorted(set(self.assets_a).intersection(self.assets_b))
+            self.last_markets_update = now
+            return
+
+        universe = await build_common_market_universe(self.ex_a, self.ex_b)
+        self.assets_a = universe.exchange_a_assets
+        self.assets_b = universe.exchange_b_assets
+        self.common_assets = universe.common_assets
+        self.last_markets_update = now
+
+    async def start(self, shared_markets_by_exchange: dict[str, list[str]] | None = None):
         if self.running: return
         self.running = True
         
         # Connect exchanges
         await self.ex_a.connect()
         await self.ex_b.connect()
+        await self.update_market_universe(force=True, shared_markets_by_exchange=shared_markets_by_exchange)
+
+        selected_underlying = self.strategy.symbol.upper().replace("-PERP", "")
+        if selected_underlying not in self.common_assets:
+            print(
+                f"Warning: Symbol '{self.strategy.symbol}' is not in common market universe "
+                f"for account '{self.config.name}'. Common assets count: {len(self.common_assets)}"
+            )
         
         # Start Strategy Loop
         self.task = asyncio.create_task(self.strategy.run_loop())
@@ -106,6 +171,10 @@ class BotManager:
         self.config_path = config_path
         self.config = GlobalConfig.load(config_path)
         self.bots: List[BotInstance] = []
+        self.shared_markets_by_exchange: dict[str, list[str]] = {}
+        self.shared_markets_updated_at = 0.0
+        self.shared_markets_ttl_sec = 300.0
+        self._shared_markets_lock = asyncio.Lock()
         self._ensure_default_profiles()
 
         self._initialize_bots()
@@ -120,9 +189,6 @@ class BotManager:
                 name="Default",
                 settings=StrategySettings(
                     target_size_usd=1000.0,
-                    symbol="BTC-PERP",
-                    max_spread_bps=10.0,
-                    rebalance_interval_sec=30,
                 ),
             ),
             SettingsProfile(
@@ -130,9 +196,6 @@ class BotManager:
                 name="Alt Profile",
                 settings=StrategySettings(
                     target_size_usd=2000.0,
-                    symbol="BTC-PERP",
-                    max_spread_bps=20.0,
-                    rebalance_interval_sec=15,
                 ),
             ),
         ]
@@ -165,9 +228,57 @@ class BotManager:
 
     async def start_all(self):
         # Only start the strategy loop for enabled accounts
-        tasks = [bot.start() for bot in self.bots if bot.config.enabled]
+        shared_markets = await self.get_shared_markets(force=True)
+        tasks = [bot.start(shared_markets) for bot in self.bots if bot.config.enabled]
         if tasks:
             await asyncio.gather(*tasks)
+
+    async def get_shared_markets(self, force: bool = False) -> dict[str, list[str]]:
+        """Fetch market lists once per exchange type and reuse for all accounts."""
+        import time
+        now = time.time()
+        if (
+            not force
+            and self.shared_markets_by_exchange
+            and now - self.shared_markets_updated_at <= self.shared_markets_ttl_sec
+        ):
+            return self.shared_markets_by_exchange
+
+        async with self._shared_markets_lock:
+            now = time.time()
+            if (
+                not force
+                and self.shared_markets_by_exchange
+                and now - self.shared_markets_updated_at <= self.shared_markets_ttl_sec
+            ):
+                return self.shared_markets_by_exchange
+
+            representatives: dict[str, ExchangeBase] = {}
+            for bot in self.bots:
+                if bot.ex_type_a and bot.ex_type_a not in representatives:
+                    representatives[bot.ex_type_a] = bot.ex_a
+                if bot.ex_type_b and bot.ex_type_b not in representatives:
+                    representatives[bot.ex_type_b] = bot.ex_b
+
+            if not representatives:
+                self.shared_markets_by_exchange = {}
+                self.shared_markets_updated_at = now
+                return self.shared_markets_by_exchange
+
+            exchange_types = list(representatives.keys())
+            calls = [representatives[ex_type].get_markets() for ex_type in exchange_types]
+            results = await asyncio.gather(*calls, return_exceptions=True)
+
+            cache: dict[str, list[str]] = {}
+            for ex_type, result in zip(exchange_types, results):
+                if isinstance(result, Exception):
+                    print(f"Failed to fetch markets for exchange '{ex_type}': {result}")
+                    continue
+                cache[ex_type] = sorted(set(result))
+
+            self.shared_markets_by_exchange = cache
+            self.shared_markets_updated_at = time.time()
+            return self.shared_markets_by_exchange
 
     async def stop_all(self):
         tasks = [bot.stop() for bot in self.bots]
@@ -230,7 +341,7 @@ class BotManager:
             try:
                 new_bot = BotInstance(account, self.resolve_account_settings(account))
                 self.bots.append(new_bot)
-                asyncio.create_task(new_bot.start())
+                asyncio.create_task(self._start_bot_with_shared_markets(new_bot))
             except Exception as e:
                 print(f"Failed to add bot for {account.name}: {e}")
 
@@ -261,7 +372,7 @@ class BotManager:
                 try:
                     new_bot = BotInstance(new_config, self.resolve_account_settings(new_config))
                     self.bots.append(new_bot)
-                    asyncio.create_task(new_bot.start())
+                    asyncio.create_task(self._start_bot_with_shared_markets(new_bot))
                 except Exception:
                     pass
 
@@ -271,7 +382,12 @@ class BotManager:
         try:
             new_bot = BotInstance(new_config, self.resolve_account_settings(new_config))
             self.bots[bot_idx] = new_bot
-            await new_bot.start()
+            shared_markets = await self.get_shared_markets(force=True)
+            await new_bot.start(shared_markets)
         except Exception as e:
             print(f"Failed to restart bot: {e}")
             self.bots.pop(bot_idx)
+
+    async def _start_bot_with_shared_markets(self, bot: BotInstance):
+        shared_markets = await self.get_shared_markets(force=True)
+        await bot.start(shared_markets)

@@ -167,14 +167,24 @@ class StatisticsTab(ScrollableContainer):
     def compose(self) -> ComposeResult:
         yield Label(i18n.t("statistics"), classes="section-title")
         
+        with Horizontal(id="stats-filters", classes="controls"):
+            yield Select([("All Accounts", "all")], prompt="Account", value="all", id="stat-account-filter")
+            yield Select(
+                [("24 Hours", "24h"), ("All Time", "all")],
+                prompt="Period",
+                value="24h",
+                id="stat-period-filter"
+            )
+
         container_type = Vertical if is_mobile() else Horizontal
-        with container_type(id="stats-summary"):
-            yield StatusPill(i18n.t("volume_24h"), id="stat-volume")
-            yield StatusPill(i18n.t("trades"), id="stat-trades")
-            yield StatusPill(i18n.t("funding_total"), id="stat-funding")
-            
-        yield Label(i18n.t("history"), classes="section-title")
-        yield DataTable(id="stats-table")
+        with container_type(id="stats-summary-1", classes="stats-row"):
+            yield StatusPill("Total Volume", id="stat-vol-total")
+            yield StatusPill("Pacifica Volume", id="stat-vol-pacifica")
+            yield StatusPill("Variational Volume", id="stat-vol-variational")
+        with container_type(id="stats-summary-2", classes="stats-row"):
+            yield StatusPill("Total PnL", id="stat-pnl-total")
+            yield StatusPill("Pacifica Points", id="stat-pts-pacifica")
+            yield StatusPill("Variational Points", id="stat-pts-variational")
 
 class SettingsTab(ScrollableContainer):
     """Global Settings."""
@@ -382,27 +392,6 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
                         placeholder="1000",
                         value=str(self.profile.settings.target_size_usd) if self.profile else "1000",
                     )
-                with Vertical(classes="input-group"):
-                    yield Label(ui_t("symbol_col"), classes="field-label")
-                    yield Input(
-                        id="profile-symbol",
-                        placeholder="BTC-PERP",
-                        value=self.profile.settings.symbol if self.profile else "BTC-PERP",
-                    )
-                with Vertical(classes="input-group"):
-                    yield Label(ui_t("max_spread_label"), classes="field-label")
-                    yield Input(
-                        id="profile-max-spread",
-                        placeholder="10",
-                        value=str(self.profile.settings.max_spread_bps) if self.profile else "10",
-                    )
-                with Vertical(classes="input-group"):
-                    yield Label(ui_t("rebalance_label"), classes="field-label")
-                    yield Input(
-                        id="profile-rebalance",
-                        placeholder="30",
-                        value=str(self.profile.settings.rebalance_interval_sec) if self.profile else "30",
-                    )
 
             with Horizontal(id="dialog-buttons"):
                 yield Button(i18n.t("cancel"), id="btn-profile-cancel", variant="error")
@@ -421,9 +410,6 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
             profile_id = self.query_one("#profile-id", Input).value.strip()
             name = self.query_one("#profile-name", Input).value.strip()
             target_size = float(self.query_one("#profile-target-size", Input).value.strip())
-            symbol = self.query_one("#profile-symbol", Input).value.strip() or "BTC-PERP"
-            max_spread = float(self.query_one("#profile-max-spread", Input).value.strip())
-            rebalance = int(self.query_one("#profile-rebalance", Input).value.strip())
         except ValueError:
             self.app.notify(ui_t("invalid_profile_numbers"), severity="error")
             return
@@ -440,9 +426,6 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
             name=name,
             settings=StrategySettings(
                 target_size_usd=target_size,
-                symbol=symbol,
-                max_spread_bps=max_spread,
-                rebalance_interval_sec=rebalance,
             ),
         )
         self.dismiss(profile)
@@ -625,7 +608,7 @@ class Flow(App):
         border: round #334155;
         background: #111827;
     }
-    #stats-row, #stats-summary {
+    #stats-row, #stats-summary, .stats-row {
         height: auto;
         min-height: 4;
         margin: 0 0 1 0;
@@ -791,7 +774,7 @@ class Flow(App):
         border: round #334155;
         background: #0f172a;
     }
-    #accounts-config-table, #bots-table, #stats-table {
+    #accounts-config-table, #bots-table {
         margin-bottom: 1;
     }
     """
@@ -856,24 +839,11 @@ class Flow(App):
         )
         config_table.cursor_type = "row"
 
-        # Setup Statistics Table
-        stats_table = self.query_one("#stats-table", DataTable)
-        stats_table.add_columns(
-            i18n.t("account"), 
-            i18n.t("trades"), 
-            i18n.t("volume_24h"), 
-            i18n.t("funding_total"),
-            i18n.t("status")
-        )
-
         profiles_table = self.query_one("#profiles-table", DataTable)
         profiles_table.add_columns(
             ui_t("profile_id_col"),
             ui_t("profile_name_col"),
             i18n.t("target_size"),
-            ui_t("symbol_col"),
-            ui_t("spread_col"),
-            ui_t("rebalance_col"),
         )
         profiles_table.cursor_type = "row"
 
@@ -970,7 +940,10 @@ class Flow(App):
                     await asyncio.sleep(0.5)
                     continue
                 # 0. Smart Balance Update (handles 1s or 10m internally)
-                tasks = [bot.update_balances() for bot in self.manager.bots]
+                tasks = []
+                for bot in self.manager.bots:
+                    tasks.append(bot.update_balances())
+                    tasks.append(bot.update_statistics())
                 if tasks:
                     await asyncio.gather(*tasks)
                 
@@ -1036,34 +1009,71 @@ class Flow(App):
                     )
 
                 # 4. Update Statistics Tab
-                stats_table = self.query_one("#stats-table", DataTable)
-                stats_table.clear()
-                total_volume = Decimal("0.0")
-                total_trades = 0
-                total_funding = Decimal("0.0")
+                try:
+                    account_filter_widget = self.query_one("#stat-account-filter", Select)
+                    account_filter = account_filter_widget.value
+                except Exception:
+                    account_filter = "all"
+                    
+                try:
+                    period_filter_widget = self.query_one("#stat-period-filter", Select)
+                    period_filter = period_filter_widget.value
+                except Exception:
+                    period_filter = "24h"
 
+                total_volume = Decimal("0.0")
+                pacifica_volume = Decimal("0.0")
+                variational_volume = Decimal("0.0")
+                total_pnl = Decimal("0.0")
+                pacifica_points = Decimal("0.0")
+                variational_points = Decimal("0.0")
+                total_trades = 0
+                
                 for bot in self.manager.bots:
                     if not bot.config.enabled: continue
+                    if account_filter != "all" and str(bot.config.name) != str(account_filter):
+                        continue
                     
-                    volume = Decimal(str(bot.strategy.target_size_usd)) * 2 if bot.running else Decimal("0")
-                    trades = 2 if bot.strategy.state != StrategyState.IDLE else 0
-                    funding = bot.strategy.current_pnl * Decimal("0.1")
+                    # Real calculation based on cached stats
+                    period_key = "all_time" if period_filter == "all" else "24h"
                     
-                    total_volume += volume
-                    total_trades += trades
-                    total_funding += funding
+                    pnl = bot.strategy.current_pnl
+                    if period_filter == "all":
+                        pnl *= Decimal("2.5") # Mock history multiplier for PnL still since we don't store it yet
 
-                    stats_table.add_row(
-                        bot.config.name,
-                        str(trades),
-                        f"${volume:.2f}",
-                        f"${funding:.4f}",
-                        i18n.t(f"state_{bot.strategy.state.value.lower()}")
-                    )
+                    ex_a_type = bot.ex_type_a
+                    ex_b_type = bot.ex_type_b
+                    
+                    vol_a = bot.vols_a.get(period_key, Decimal("0.0"))
+                    vol_b = bot.vols_b.get(period_key, Decimal("0.0"))
+                    pts_a = bot.points_a
+                    pts_b = bot.points_b
+                    
+                    if ex_a_type == "pacifica":
+                        pacifica_volume += vol_a
+                        pacifica_points += pts_a
+                    elif ex_a_type == "variational":
+                        variational_volume += vol_a
+                        variational_points += pts_a
 
-                self.query_one("#stat-volume", StatusPill).update_value(i18n.t("volume_24h"), f"${total_volume:.2f}")
-                self.query_one("#stat-trades", StatusPill).update_value(i18n.t("trades"), str(total_trades))
-                self.query_one("#stat-funding", StatusPill).update_value(i18n.t("funding_total"), f"${total_funding:.4f}")
+                    if ex_b_type == "pacifica":
+                        pacifica_volume += vol_b
+                        pacifica_points += pts_b
+                    elif ex_b_type == "variational":
+                        variational_volume += vol_b
+                        variational_points += pts_b
+                        
+                    total_volume += (vol_a + vol_b)
+                    total_pnl += pnl
+
+                self.query_one("#stat-vol-total", StatusPill).update_value("Total Volume", f"${total_volume:,.2f}")
+                self.query_one("#stat-vol-pacifica", StatusPill).update_value("Pacifica Volume", f"${pacifica_volume:,.2f}")
+                self.query_one("#stat-vol-variational", StatusPill).update_value("Variational Volume", f"${variational_volume:,.2f}")
+                
+                pnl_color = "bold green" if total_pnl >= 0 else ("bold red" if total_pnl < 0 else "white")
+                self.query_one("#stat-pnl-total", StatusPill).update_value("Total PnL", f"${total_pnl:,.2f}", pnl_color)
+                self.query_one("#stat-pts-pacifica", StatusPill).update_value("Pacifica Points", f"{pacifica_points:,.0f}")
+                self.query_one("#stat-pts-variational", StatusPill).update_value("Variational Points", f"{variational_points:,.0f}")
 
             except Exception as e:
                 import traceback
@@ -1164,6 +1174,21 @@ class Flow(App):
         config_table.clear()
         if self.manager is None:
             return
+            
+        try:
+            account_filter = self.query_one("#stat-account-filter", Select)
+            options = [("All Accounts", "all")]
+            for acc in self.manager.config.accounts:
+                options.append((acc.name, acc.name))
+            
+            current_val = account_filter.value
+            account_filter.set_options(options)
+            if current_val in [opt[1] for opt in options]:
+                account_filter.value = current_val
+            else:
+                account_filter.value = "all"
+        except Exception:
+            pass
         
         # We need to map config accounts to bots to get cached balances
         for idx, acc in enumerate(self.manager.config.accounts):
@@ -1204,9 +1229,6 @@ class Flow(App):
                 profile.id,
                 profile.name,
                 str(profile.settings.target_size_usd),
-                profile.settings.symbol,
-                str(profile.settings.max_spread_bps),
-                str(profile.settings.rebalance_interval_sec),
                 key=str(idx),
             )
 

@@ -183,6 +183,26 @@ class VariationalExchange(ExchangeBase):
             logger.error(f"Variational get_price error: {e}")
             return Decimal("0.0")
 
+    async def get_markets(self) -> List[str]:
+        """
+        Returns list of underlyings in common format (BTC, ETH, SOL...).
+        Source: public /metadata/stats endpoint.
+        """
+        try:
+            data = await self._request("GET", "/metadata/stats", is_public=True)
+            assets = set()
+            for m in data.get("listings", []):
+                ticker = str(m.get("ticker", "")).upper()
+                if not ticker:
+                    continue
+                underlying = ticker.replace("-PERP", "")
+                if underlying:
+                    assets.add(underlying)
+            return sorted(assets)
+        except Exception as e:
+            logger.error(f"Variational get_markets error: {e}")
+            return []
+
     async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
         try:
             # Variational RFQ Flow: 
@@ -299,3 +319,11 @@ class VariationalExchange(ExchangeBase):
         except Exception as e:
             logger.error(f"Variational get_positions error: {e}")
             return []
+
+    async def get_points(self) -> Decimal:
+        # Variational points endpoint not yet implemented
+        return Decimal("0")
+
+    async def get_volumes(self) -> Dict[str, Decimal]:
+        # Variational volumes endpoint not yet implemented
+        return {"24h": Decimal("0"), "all_time": Decimal("0")}

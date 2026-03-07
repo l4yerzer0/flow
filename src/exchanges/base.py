@@ -42,6 +42,11 @@ class ExchangeBase(ABC):
         pass
 
     @abstractmethod
+    async def get_markets(self) -> List[str]:
+        """Get tradable market underlyings (e.g. BTC, ETH)."""
+        pass
+
+    @abstractmethod
     async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
         """Open a position (Long/Short)."""
         pass
@@ -54,4 +59,14 @@ class ExchangeBase(ABC):
     @abstractmethod
     async def get_positions(self) -> List[Position]:
         """Get all open positions."""
+        pass
+
+    @abstractmethod
+    async def get_points(self) -> Decimal:
+        """Get account points."""
+        pass
+
+    @abstractmethod
+    async def get_volumes(self) -> Dict[str, Decimal]:
+        """Get volume statistics (e.g. 24h, all_time)."""
         pass

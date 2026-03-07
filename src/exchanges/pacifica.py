@@ -8,8 +8,11 @@ from decimal import Decimal
 from typing import List, Optional, Dict
 import aiohttp
 import base58
+import logging
 from solders.keypair import Keypair
 from .base import ExchangeBase, Order, Position
+
+logger = logging.getLogger(__name__)
 
 class PacificaExchange(ExchangeBase):
     """Implementation for Pacifica DEX (Solana-based)."""
@@ -44,7 +47,7 @@ class PacificaExchange(ExchangeBase):
             raise ValueError("Private key (api_secret) is required for signing")
 
         timestamp = int(time.time() * 1000)
-        expiry_window = 30000
+        expiry_window = 300000 # Increased to match browser
         
         # Prepare "data to sign" object
         sign_obj = {
@@ -72,15 +75,20 @@ class PacificaExchange(ExchangeBase):
         signature_bytes = self.keypair.sign_message(message_bytes)
         signature_b58 = base58.b58encode(bytes(signature_bytes)).decode("utf-8")
         
+        pubkey_str = str(self.keypair.pubkey())
         res = {
-            "account": str(self.keypair.pubkey()),
+            "account": self.api_key if self.api_key else pubkey_str,
             "signature": signature_b58,
             "timestamp": timestamp,
             "expiry_window": expiry_window,
         }
+        
+        if self.api_key and self.api_key != pubkey_str:
+            res["agent_wallet"] = pubkey_str
+            
         return res
 
-    async def _request(self, method: str, endpoint: str, data: dict = None, sign_type: str = None) -> dict:
+    async def _request(self, method: str, endpoint: str, data: dict = None, sign_type: str = None, extra_headers: dict = None) -> dict:
         url = f"{self.BASE_URL}{endpoint}"
         
         payload = data or {}
@@ -97,9 +105,13 @@ class PacificaExchange(ExchangeBase):
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
+        headers = {}
+        if extra_headers:
+            headers.update(extra_headers)
+
         async with aiohttp.ClientSession() as session:
             # For GET requests we use params, for others - json body
-            kwargs = {"ssl": ssl_ctx}
+            kwargs = {"ssl": ssl_ctx, "headers": headers}
             if method == "GET":
                 kwargs["params"] = payload
             else:
@@ -130,9 +142,48 @@ class PacificaExchange(ExchangeBase):
         return Decimal(str(total_val))
 
     async def get_price(self, symbol: str) -> Decimal:
-        # Public endpoint usually
-        resp = await self._request("GET", f"/market/price", {"symbol": symbol})
+        normalized_symbol = symbol.upper()
+        if not normalized_symbol.endswith("-PERP"):
+            normalized_symbol = f"{normalized_symbol}-PERP"
+
+        # Primary endpoint from Pacifica docs.
+        try:
+            resp = await self._request("GET", "/info/prices")
+            prices = resp.get("data", [])
+            if isinstance(prices, list):
+                for item in prices:
+                    if item.get("symbol") == normalized_symbol:
+                        return Decimal(str(item.get("price", 0)))
+        except Exception as e:
+            logger.warning(f"Pacifica /info/prices failed, fallback to /market/price: {e}")
+
+        # Fallback for older API.
+        resp = await self._request("GET", "/market/price", {"symbol": normalized_symbol})
         return Decimal(str(resp.get("price", 0)))
+
+    async def get_markets(self) -> List[str]:
+        """
+        Returns underlying symbols common format (BTC, ETH, SOL...).
+        Pacifica uses instrument symbols like BTC-PERP in /info.
+        """
+        try:
+            resp = await self._request("GET", "/info")
+            instruments = resp.get("data", [])
+            if not isinstance(instruments, list):
+                return []
+
+            assets = set()
+            for item in instruments:
+                symbol = str(item.get("symbol", "")).upper()
+                if not symbol:
+                    continue
+                underlying = symbol.replace("-PERP", "")
+                if underlying:
+                    assets.add(underlying)
+            return sorted(assets)
+        except Exception as e:
+            logger.error(f"Pacifica get_markets error: {e}")
+            return []
 
     async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
         data = {
@@ -173,3 +224,47 @@ class PacificaExchange(ExchangeBase):
                 unrealized_pnl=Decimal(str(p.get("unrealized_pnl", 0)))
             ))
         return positions
+
+    async def get_points(self) -> Decimal:
+        try:
+            req_data = {
+                "account": self.api_key
+            }
+            # The browser sends this as a POST with Origin/Referer headers to bypass 403
+            headers = {
+                "Origin": "https://app.pacifica.fi",
+                "Referer": "https://app.pacifica.fi/"
+            }
+            resp = await self._request("POST", "/account/points", req_data, sign_type="account", extra_headers=headers)
+            
+            # Debug log
+            try:
+                with open("logs/pacifica_points.log", "a") as f:
+                    f.write(f"REQ: {req_data} | RESP: {resp}\n")
+            except:
+                pass
+                
+            data = resp.get("data") or {}
+            pts = data.get("points", "0")
+            if pts is None: pts = "0"
+            return Decimal(str(pts))
+        except Exception as e:
+            try:
+                with open("logs/pacifica_points.log", "a") as f:
+                    f.write(f"ERR: {e}\n")
+            except:
+                pass
+            logger.error(f"Pacifica get_points error: {e}", exc_info=True)
+            return Decimal("0")
+
+    async def get_volumes(self) -> Dict[str, Decimal]:
+        try:
+            resp = await self._request("GET", "/portfolio/volume", {"account": self.api_key})
+            data = resp.get("data", {})
+            return {
+                "24h": Decimal(str(data.get("volume_1d", "0"))),
+                "all_time": Decimal(str(data.get("volume_all_time", "0")))
+            }
+        except Exception as e:
+            logger.error(f"Pacifica get_volumes error: {e}")
+            return {"24h": Decimal("0"), "all_time": Decimal("0")}
