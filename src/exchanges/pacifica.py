@@ -4,11 +4,14 @@ import asyncio
 import hmac
 import hashlib
 import ssl
+import os
 from decimal import Decimal
 from typing import List, Optional, Dict
 import aiohttp
 import base58
 import logging
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
 from solders.keypair import Keypair
 from .base import ExchangeBase, Order, Position
 
@@ -37,6 +40,23 @@ class PacificaExchange(ExchangeBase):
         # Basic connectivity check or session initiation
         self.connected = True
         return True
+
+    def _sign_message_bytes(self, message_bytes: bytes) -> str:
+        if not self.keypair:
+            raise ValueError("Private key (api_secret) is required for signing")
+        signature_bytes = self.keypair.sign_message(message_bytes)
+        return base58.b58encode(bytes(signature_bytes)).decode("utf-8")
+
+    def _verify_signature(self, pubkey_b58: str, signature_b58: str, message_bytes: bytes) -> bool:
+        try:
+            pubkey_bytes = base58.b58decode(pubkey_b58)
+            sig_bytes = base58.b58decode(signature_b58)
+            Ed25519PublicKey.from_public_bytes(pubkey_bytes).verify(sig_bytes, message_bytes)
+            return True
+        except InvalidSignature:
+            return False
+        except Exception:
+            return False
 
     def _get_signature(self, op_type: str, data: dict) -> dict:
         """
@@ -72,8 +92,7 @@ class PacificaExchange(ExchangeBase):
         message_bytes = compact_json.encode("utf-8")
         
         # Sign using Ed25519
-        signature_bytes = self.keypair.sign_message(message_bytes)
-        signature_b58 = base58.b58encode(bytes(signature_bytes)).decode("utf-8")
+        signature_b58 = self._sign_message_bytes(message_bytes)
         
         pubkey_str = str(self.keypair.pubkey())
         res = {
@@ -227,33 +246,42 @@ class PacificaExchange(ExchangeBase):
 
     async def get_points(self) -> Decimal:
         try:
-            # We pass an empty payload to _request so that sign_obj["data"] = {}
-            # The auth fields (account, agent_wallet, signature, etc.) will be automatically added by _request
-            req_data = {}
+            timestamp = int(time.time() * 1000)
+            expiry_window = 300000
+
+            account = self.api_key if self.api_key else str(self.keypair.pubkey())
+            agent_wallet = str(self.keypair.pubkey())
+
+            sign_obj = {
+                "data": {},
+                "expiry_window": expiry_window,
+                "timestamp": timestamp,
+                "type": "get_points",
+            }
             
+            compact_json = json.dumps(sign_obj, separators=(",", ":"))
+            signature_b58 = self._sign_message_bytes(compact_json.encode("utf-8"))
+
+            payload = {
+                "account": account,
+                "agent_wallet": agent_wallet,
+                "signature": signature_b58,
+                "timestamp": timestamp,
+                "expiry_window": expiry_window,
+            }
+
             headers = {
                 "Origin": "https://app.pacifica.fi",
                 "Referer": "https://app.pacifica.fi/"
             }
-            resp = await self._request("POST", "/account/points", req_data, sign_type="account", extra_headers=headers)
-            
-            # Debug log
-            try:
-                with open("logs/pacifica_points.log", "a") as f:
-                    f.write(f"REQ: {req_data} | RESP: {resp}\n")
-            except:
-                pass
+
+            resp = await self._request("POST", "/account/points", payload, sign_type=None, extra_headers=headers)
                 
             data = resp.get("data") or {}
             pts = data.get("points", "0")
             if pts is None: pts = "0"
             return Decimal(str(pts))
         except Exception as e:
-            try:
-                with open("logs/pacifica_points.log", "a") as f:
-                    f.write(f"ERR: {e}\n")
-            except:
-                pass
             logger.error(f"Pacifica get_points error: {e}", exc_info=True)
             return Decimal("0")
 
