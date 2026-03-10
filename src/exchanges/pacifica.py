@@ -227,10 +227,10 @@ class PacificaExchange(ExchangeBase):
 
     async def get_points(self) -> Decimal:
         try:
-            req_data = {
-                "account": self.api_key
-            }
-            # The browser sends this as a POST with Origin/Referer headers to bypass 403
+            # We pass an empty payload to _request so that sign_obj["data"] = {}
+            # The auth fields (account, agent_wallet, signature, etc.) will be automatically added by _request
+            req_data = {}
+            
             headers = {
                 "Origin": "https://app.pacifica.fi",
                 "Referer": "https://app.pacifica.fi/"
