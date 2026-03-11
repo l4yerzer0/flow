@@ -41,12 +41,12 @@ class VariationalExchange(ExchangeBase):
     PUBLIC_API_URL = "https://omni-client-api.prod.ap-northeast-1.variational.io"
     INTERNAL_API_URL = "https://omni.variational.io/api"
     
-    def __init__(self, name: str, api_key: str = "", api_secret: str = ""):
+    def __init__(self, name: str, api_key: str = "", api_secret: str = "", proxy: Optional[str] = None):
         """
         api_key: Wallet Address (0x...)
         api_secret: Private Key (0x...)
         """
-        super().__init__(name, api_key, api_secret)
+        super().__init__(name, api_key, api_secret, proxy)
         self.wallet_address = (api_key or "").lower()
         self.private_key = api_secret
         if self.private_key and self.private_key.startswith("0x"):
@@ -54,6 +54,11 @@ class VariationalExchange(ExchangeBase):
             
         self.access_token = None
         self.scraper = cloudscraper.create_scraper()
+        if self.proxy:
+            self.scraper.proxies = {
+                "http": self.proxy,
+                "https": self.proxy,
+            }
         self.base_url = self.INTERNAL_API_URL
         
         # Load from persistent cache
@@ -321,9 +326,25 @@ class VariationalExchange(ExchangeBase):
             return []
 
     async def get_points(self) -> Decimal:
-        # Variational points endpoint not yet implemented
-        return Decimal("0")
+        try:
+            data = await self._request("GET", "/points/summary")
+            # Expected response: {"total_points": "0.879061", ...}
+            pts = data.get("total_points") or data.get("self_points") or "0"
+            return Decimal(str(pts))
+        except Exception as e:
+            logger.error(f"Variational get_points error: {e}")
+            return Decimal("0")
 
     async def get_volumes(self) -> Dict[str, Decimal]:
-        # Variational volumes endpoint not yet implemented
-        return {"24h": Decimal("0"), "all_time": Decimal("0")}
+        try:
+            data = await self._request("GET", "/portfolio/trade_volume")
+            # Using total.lifetime for 'all_time' and last_30d as proxy for '24h' if 24h is not available
+            # or just map what we have
+            total = data.get("total") or {}
+            return {
+                "24h": Decimal(str(data.get("last_30d", "0"))), # Note: using 30d since 24h is missing in response
+                "all_time": Decimal(str(total.get("lifetime", "0")))
+            }
+        except Exception as e:
+            logger.error(f"Variational get_volumes error: {e}")
+            return {"24h": Decimal("0"), "all_time": Decimal("0")}

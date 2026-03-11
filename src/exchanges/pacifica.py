@@ -22,8 +22,8 @@ class PacificaExchange(ExchangeBase):
     
     BASE_URL = "https://api.pacifica.fi/api/v1"
     
-    def __init__(self, name: str, api_key: str = "", api_secret: str = "", subaccount_id: str = "0"):
-        super().__init__(name, api_key, api_secret)
+    def __init__(self, name: str, api_key: str = "", api_secret: str = "", subaccount_id: str = "0", proxy: Optional[str] = None):
+        super().__init__(name, api_key, api_secret, proxy)
         self.subaccount_id = subaccount_id
         self.keypair = None
         if api_secret:
@@ -131,6 +131,9 @@ class PacificaExchange(ExchangeBase):
         async with aiohttp.ClientSession() as session:
             # For GET requests we use params, for others - json body
             kwargs = {"ssl": ssl_ctx, "headers": headers}
+            if self.proxy:
+                kwargs["proxy"] = self.proxy
+                
             if method == "GET":
                 kwargs["params"] = payload
             else:

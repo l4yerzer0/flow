@@ -33,6 +33,7 @@ class AccountConfig(BaseModel):
     name: str = "Account 1"
     enabled: bool = True
     exchanges: List[ExchangeConfig] = Field(default_factory=list)
+    proxy: Optional[str] = None
     settings_profile_id: str = "default"
     settings_override: StrategySettingsOverride = Field(default_factory=StrategySettingsOverride)
 

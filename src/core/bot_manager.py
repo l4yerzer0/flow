@@ -14,7 +14,7 @@ from src.exchanges.variational import VariationalExchange
 from src.exchanges.market_universe import build_common_market_universe
 from src.strategy.delta_neutral import DeltaNeutralStrategy, StrategyState
 
-def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> ExchangeBase:
+def create_exchange(config: ExchangeConfig, account_name: str, index: int, proxy: str | None = None) -> ExchangeBase:
     """Factory to create exchange instances based on config."""
     name = f"{config.exchange_type.capitalize()} {index} ({account_name})"
 
@@ -23,14 +23,16 @@ def create_exchange(config: ExchangeConfig, account_name: str, index: int) -> Ex
             name=name,
             api_key=config.params.get("public_key", ""),
             api_secret=config.params.get("private_key", ""),
-            subaccount_id="0" # Default as requested
+            subaccount_id="0", # Default as requested
+            proxy=proxy
         )
 
     if config.exchange_type == "variational":
         return VariationalExchange(
             name=name,
             api_key=config.params.get("public_key", "") or config.params.get("address", ""),
-            api_secret=config.params.get("private_key", "")
+            api_secret=config.params.get("private_key", ""),
+            proxy=proxy
         )
 
     raise ValueError(f"Unsupported exchange type: {config.exchange_type}")
@@ -47,8 +49,8 @@ class BotInstance:
         if len(config.exchanges) < 2:
             raise ValueError(f"Account '{config.name}' must have 2 exchanges configured")
 
-        self.ex_a = create_exchange(config.exchanges[0], config.name, 1)
-        self.ex_b = create_exchange(config.exchanges[1], config.name, 2)
+        self.ex_a = create_exchange(config.exchanges[0], config.name, 1, proxy=config.proxy)
+        self.ex_b = create_exchange(config.exchanges[1], config.name, 2, proxy=config.proxy)
         
         # Balance Cache
         self.bal_a = Decimal("0.0")

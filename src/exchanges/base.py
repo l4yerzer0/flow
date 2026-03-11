@@ -20,10 +20,11 @@ class Position(BaseModel):
 class ExchangeBase(ABC):
     """Abstract Base Class for all Exchange integrations."""
     
-    def __init__(self, name: str, api_key: str = None, api_secret: str = None):
+    def __init__(self, name: str, api_key: str = None, api_secret: str = None, proxy: Optional[str] = None):
         self.name = name
         self.api_key = api_key
         self.api_secret = api_secret
+        self.proxy = proxy
         self.connected = False
 
     @abstractmethod

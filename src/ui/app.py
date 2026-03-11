@@ -74,6 +74,7 @@ def ui_t(key: str) -> str:
         "target_override_label": "Переопределение объема (USD)",
         "target_override_placeholder": "Пусто = значение из профиля",
         "select_profile_required": "Выберите профиль настроек",
+        "proxy_label": "Прокси (http://user:pass@host:port)",
     }
     extra_en = {
         "profiles_tab": "Profiles",
@@ -104,6 +105,7 @@ def ui_t(key: str) -> str:
         "target_override_label": "Target Size Override (USD)",
         "target_override_placeholder": "Leave blank to use profile value",
         "select_profile_required": "Select a settings profile",
+        "proxy_label": "Proxy (http://user:pass@host:port)",
     }
     extra = extra_ru if i18n.lang == "ru" else extra_en
     return extra.get(key, table.get(key, key))
@@ -281,6 +283,7 @@ class ExchangeConfigForm(Vertical):
                     if field == "public_key": val = self.initial_config.params.get("api_key", "")
                     if field == "private_key": val = self.initial_config.params.get("api_secret", "") or self.initial_config.params.get("wallet_private_key", "")
             
+            await container.mount(Label(i18n.t(field), classes="field-label"))
             await container.mount(Input(
                 placeholder=i18n.t(field), 
                 id=f"{self.id_prefix}-{field}", 
@@ -475,12 +478,21 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                             )
                         )
                 
+                with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group", id="acc-proxy-group"):
+                        yield Label(ui_t("proxy_label"), classes="field-label")
+                        yield Input(
+                            placeholder="http://...",
+                            id="acc-proxy",
+                            value=self.account.proxy if self.account else ""
+                        )
+                
                 ex_a_init = self.account.exchanges[0] if self.account and len(self.account.exchanges) > 0 else None
                 ex_b_init = self.account.exchanges[1] if self.account and len(self.account.exchanges) > 1 else None
                 
                 with container_type(id="ex-row"):
-                    yield ExchangeConfigForm("Exchange A", "ex-a", initial_config=ex_a_init)
-                    yield ExchangeConfigForm("Exchange B", "ex-b", initial_config=ex_b_init)
+                    yield ExchangeConfigForm("DEX A", "ex-a", initial_config=ex_a_init)
+                    yield ExchangeConfigForm("DEX B", "ex-b", initial_config=ex_b_init)
 
             with Horizontal(id="dialog-buttons"):
                 yield Button(i18n.t("cancel"), id="btn-cancel", variant="error")
@@ -522,11 +534,13 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 # Perform Validation
                 self.app.notify(i18n.t("verifying_accounts") or "Verifying accounts...", severity="information")
                 
+                acc_proxy = self.query_one("#acc-proxy", Input).value.strip() or None
+
                 async def verify(form, config):
                     form.clear_status()
                     form.set_status("WAIT", "yellow")
                     try:
-                        ex = create_exchange(config, name, 1)
+                        ex = create_exchange(config, name, 1, proxy=acc_proxy)
                         await ex.connect()
                         await ex.get_balance()
                         config.last_error = None
@@ -547,6 +561,7 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                     settings_profile_id=profile_id,
                     settings_override=StrategySettingsOverride(target_size_usd=size),
                     exchanges=[ex_a_config, ex_b_config],
+                    proxy=self.query_one("#acc-proxy", Input).value.strip() or None,
                     enabled=self.account.enabled if self.account else True
                 )
                 self.dismiss(result)
@@ -833,8 +848,8 @@ class Flow(App):
             i18n.t("name"), 
             ui_t("profile_col"),
             i18n.t("target_size"), 
-            "Exchange A", 
-            "Exchange B",
+            "DEX A", 
+            "DEX B",
             i18n.t("balance")
         )
         config_table.cursor_type = "row"
