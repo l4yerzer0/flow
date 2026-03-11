@@ -111,6 +111,12 @@ def ui_t(key: str) -> str:
     return extra.get(key, table.get(key, key))
 
 
+def format_points(points: Decimal) -> str:
+    """Format points: 1 decimal place, or K-notation for 1000+."""
+    if points >= 1000:
+        return f"{points / 1000:,.2f}K"
+    return f"{points:,.1f}"
+
 class StatusPill(Static):
     DEFAULT_CSS = """
     StatusPill {
@@ -160,7 +166,9 @@ class AccountsTab(ScrollableContainer):
         yield DataTable(id="accounts-config-table")
         
         with Horizontal(classes="controls"):
-            yield Button(i18n.t("add_account"), variant="primary", id="btn-add-account")
+            yield Button(i18n.t("btn_start"), variant="primary", id="btn-start-account", disabled=True)
+            yield Button(i18n.t("btn_stop"), variant="error", id="btn-stop-account", disabled=True)
+            yield Button(i18n.t("add_account"), variant="default", id="btn-add-account")
             yield Button(i18n.t("edit_selected"), variant="default", id="btn-edit-account", disabled=True)
             yield Button(i18n.t("remove_selected"), variant="error", id="btn-remove-account", disabled=True)
 
@@ -883,7 +891,7 @@ class Flow(App):
             self.manager = BotManager()
             self._refresh_accounts_table()
             self._refresh_profiles_table()
-            await self.manager.start_all()
+            # await self.manager.start_all()  <-- Removed automatic start
             asyncio.create_task(self.update_loop())
             self.call_after_refresh(self._enable_default_focus_mode)
         except ValueError:
@@ -969,7 +977,7 @@ class Flow(App):
                 
                 table.clear()
                 for bot in self.manager.bots:
-                    if not bot.config.enabled:
+                    if not bot.running:
                         continue
                         
                     if bot.last_bal_update == 0:
@@ -1087,8 +1095,8 @@ class Flow(App):
                 
                 pnl_color = "bold green" if total_pnl >= 0 else ("bold red" if total_pnl < 0 else "white")
                 self.query_one("#stat-pnl-total", StatusPill).update_value("Total PnL", f"${total_pnl:,.2f}", pnl_color)
-                self.query_one("#stat-pts-pacifica", StatusPill).update_value("Pacifica Points", f"{pacifica_points:,.0f}")
-                self.query_one("#stat-pts-variational", StatusPill).update_value("Variational Points", f"{variational_points:,.0f}")
+                self.query_one("#stat-pts-pacifica", StatusPill).update_value("Pacifica Points", format_points(pacifica_points))
+                self.query_one("#stat-pts-variational", StatusPill).update_value("Variational Points", format_points(variational_points))
 
             except Exception as e:
                 import traceback
@@ -1112,6 +1120,22 @@ class Flow(App):
             
             self.push_screen(AccountSettingsScreen(self.manager.config.settings_profiles), add_account_callback)
             
+        elif event.button.id == "btn-start-account":
+            table = self.query_one("#accounts-config-table", DataTable)
+            if table.cursor_row is not None:
+                idx = table.cursor_row
+                acc = self.manager.config.accounts[idx]
+                self.log_widget.write(f"[green]{i18n.t('btn_start')}: {acc.name}[/]")
+                asyncio.create_task(self.manager.start_account(idx))
+                
+        elif event.button.id == "btn-stop-account":
+            table = self.query_one("#accounts-config-table", DataTable)
+            if table.cursor_row is not None:
+                idx = table.cursor_row
+                acc = self.manager.config.accounts[idx]
+                self.log_widget.write(f"[red]{i18n.t('btn_stop')}: {acc.name}[/]")
+                asyncio.create_task(self.manager.stop_account(idx))
+
         elif event.button.id == "btn-edit-account":
             table = self.query_one("#accounts-config-table", DataTable)
             if table.cursor_row is not None:
@@ -1253,6 +1277,8 @@ class Flow(App):
         if event.data_table.id == "accounts-config-table":
             self.query_one("#btn-remove-account").disabled = False
             self.query_one("#btn-edit-account").disabled = False
+            self.query_one("#btn-start-account").disabled = False
+            self.query_one("#btn-stop-account").disabled = False
         elif event.data_table.id == "profiles-table":
             self.query_one("#btn-edit-profile").disabled = False
             self.query_one("#btn-remove-profile").disabled = False

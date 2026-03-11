@@ -228,6 +228,16 @@ class BotManager:
             except Exception as e:
                 print(f"Failed to initialize bot for {acc.name}: {e}")
 
+    async def start_account(self, index: int):
+        if 0 <= index < len(self.bots):
+            bot = self.bots[index]
+            shared_markets = await self.get_shared_markets(force=True)
+            await bot.start(shared_markets)
+
+    async def stop_account(self, index: int):
+        if 0 <= index < len(self.bots):
+            await self.bots[index].stop()
+
     async def start_all(self):
         # Only start the strategy loop for enabled accounts
         shared_markets = await self.get_shared_markets(force=True)
