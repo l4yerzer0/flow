@@ -150,9 +150,13 @@ class VariationalExchange(ExchangeBase):
                 raise Exception("Authentication failed")
 
         def do_req():
-            return self.scraper.request(method, url, json=data)
+            # Add a 10 second timeout to prevent hanging forever on Cloudflare challenges or network issues
+            return self.scraper.request(method, url, json=data, timeout=10)
 
-        resp = await asyncio.to_thread(do_req)
+        try:
+            resp = await asyncio.to_thread(do_req)
+        except Exception as e:
+            raise Exception(f"Variational Network/Cloudflare Error: {e}")
         
         # Handle expiration (401)
         if resp.status_code == 401 and not is_public:
@@ -160,9 +164,13 @@ class VariationalExchange(ExchangeBase):
             self.access_token = None
             success = await self.connect()
             if success:
-                resp = await asyncio.to_thread(do_req)
+                try:
+                    resp = await asyncio.to_thread(do_req)
+                except Exception as e:
+                    raise Exception(f"Variational Network/Cloudflare Error after re-auth: {e}")
             
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            raise Exception(f"Variational API Error: {resp.status_code} - {resp.text}")
         return resp.json()
 
     async def get_balance(self, asset: str = "USDC") -> Decimal:
@@ -185,7 +193,7 @@ class VariationalExchange(ExchangeBase):
                     return Decimal(str(m.get("mark_price", 0.0)))
             return Decimal("0.0")
         except Exception as e:
-            logger.error(f"Variational get_price error: {e}")
+            logger.warning(f"Variational get_price failed for {symbol}: {e}")
             return Decimal("0.0")
 
     async def get_markets(self) -> List[str]:
@@ -208,12 +216,45 @@ class VariationalExchange(ExchangeBase):
             logger.error(f"Variational get_markets error: {e}")
             return []
 
-    async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
+    async def open_position(
+        self, 
+        symbol: str, 
+        side: str, 
+        amount: Decimal, 
+        price: Optional[Decimal] = None, 
+        order_type: str = 'market'
+    ) -> Order:
         try:
-            # Variational RFQ Flow: 
-            # 1. Indicative Quote -> 2. Market Order
             underlying = symbol.replace("-PERP", "")
             
+            if order_type == 'limit' and price is not None:
+                limit_payload = {
+                    "order_type": "limit",
+                    "limit_price": str(price),
+                    "side": side.lower(),
+                    "instrument": {
+                        "underlying": underlying,
+                        "instrument_type": "perpetual_future",
+                        "settlement_asset": "USDC",
+                        "funding_interval_s": 3600
+                    },
+                    "qty": str(amount),
+                    "slippage_limit": "0.005",
+                    "is_auto_resize": False,
+                    "use_mark_price": False,
+                    "is_reduce_only": False
+                }
+                resp = await self._request("POST", "/orders/new/limit", data=limit_payload)
+                return Order(
+                    symbol=symbol,
+                    side=side,
+                    amount=amount,
+                    price=price,
+                    order_type="limit"
+                )
+            
+            # Variational Market RFQ Flow: 
+            # 1. Indicative Quote -> 2. Market Order
             # Request Quote
             quote_payload = {
                 "instrument": {
@@ -237,15 +278,14 @@ class VariationalExchange(ExchangeBase):
                 "max_slippage": 0.01,
                 "is_reduce_only": False
             }
-            # The old connector used /orders/new/market
             resp = await self._request("POST", "/orders/new/market", data=order_payload)
             
             return Order(
                 symbol=symbol,
                 side=side,
                 amount=amount,
-                price=None, # Market order
-                order_type="market"
+                price=price or Decimal(str(quote_data.get("price", 0))),
+                order_type=order_type
             )
         except Exception as e:
             logger.error(f"Variational open_position error: {e}")
@@ -324,6 +364,23 @@ class VariationalExchange(ExchangeBase):
         except Exception as e:
             logger.error(f"Variational get_positions error: {e}")
             return []
+
+    async def get_funding_rate(self, symbol: str) -> Decimal:
+        """Fetch funding rate from public metadata/stats endpoint."""
+        try:
+            data = await self._request("GET", "/metadata/stats", is_public=True)
+            ticker = symbol
+            if not ticker.endswith("-PERP"):
+                ticker = f"{ticker}-PERP"
+                
+            for m in data.get("listings", []):
+                if m.get("ticker") == ticker:
+                    # Often provided as 'funding_rate' or 'current_funding_rate'
+                    return Decimal(str(m.get("funding_rate") or m.get("current_funding_rate") or 0.0))
+            return Decimal("0.0")
+        except Exception as e:
+            logger.error(f"Variational get_funding_rate error: {e}")
+            return Decimal("0.0")
 
     async def get_points(self) -> Decimal:
         try:

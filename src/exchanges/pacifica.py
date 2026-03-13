@@ -128,22 +128,27 @@ class PacificaExchange(ExchangeBase):
         if extra_headers:
             headers.update(extra_headers)
 
-        async with aiohttp.ClientSession() as session:
-            # For GET requests we use params, for others - json body
-            kwargs = {"ssl": ssl_ctx, "headers": headers}
-            if self.proxy:
-                kwargs["proxy"] = self.proxy
-                
-            if method == "GET":
-                kwargs["params"] = payload
-            else:
-                kwargs["json"] = payload
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                # For GET requests we use params, for others - json body
+                kwargs = {"ssl": ssl_ctx, "headers": headers}
+                if self.proxy:
+                    kwargs["proxy"] = self.proxy
+                    
+                if method == "GET":
+                    kwargs["params"] = payload
+                else:
+                    kwargs["json"] = payload
 
-            async with session.request(method, url, **kwargs) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise Exception(f"Pacifica API Error: {resp.status} - {text}")
-                return await resp.json()
+                async with session.request(method, url, **kwargs) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise Exception(f"Pacifica API Error: {resp.status} - {text}")
+                    return await resp.json()
+        except asyncio.TimeoutError:
+            raise Exception("Pacifica API Error: Timeout")
+        except aiohttp.ClientError as e:
+            raise Exception(f"Pacifica API Error: Network error - {e}")
 
     async def get_balance(self, asset: str = "USDC") -> Decimal:
         # According to docs: GET /account
@@ -177,11 +182,10 @@ class PacificaExchange(ExchangeBase):
                     if item.get("symbol") == normalized_symbol:
                         return Decimal(str(item.get("price", 0)))
         except Exception as e:
-            logger.warning(f"Pacifica /info/prices failed, fallback to /market/price: {e}")
+            logger.warning(f"Pacifica /info/prices failed: {e}")
 
-        # Fallback for older API.
-        resp = await self._request("GET", "/market/price", {"symbol": normalized_symbol})
-        return Decimal(str(resp.get("price", 0)))
+        # Return 0 instead of failing completely
+        return Decimal("0")
 
     async def get_markets(self) -> List[str]:
         """
@@ -207,20 +211,31 @@ class PacificaExchange(ExchangeBase):
             logger.error(f"Pacifica get_markets error: {e}")
             return []
 
-    async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
+    async def open_position(
+        self, 
+        symbol: str, 
+        side: str, 
+        amount: Decimal, 
+        price: Optional[Decimal] = None, 
+        order_type: str = 'market'
+    ) -> Order:
         data = {
             "symbol": symbol,
             "side": "bid" if side == "buy" else "ask",
             "amount": float(amount),
-            "subaccount_id": self.subaccount_id
+            "subaccount_id": self.subaccount_id,
+            "order_type": order_type
         }
+        if order_type == 'limit' and price:
+            data["price"] = float(price)
+            
         resp = await self._request("POST", "/order/create", data, sign_type="create_order")
         return Order(
             symbol=symbol,
             side=side,
             amount=amount,
-            price=Decimal(str(resp.get("price", 0))),
-            order_type="market"
+            price=Decimal(str(resp.get("price") or price or 0)),
+            order_type=order_type
         )
 
     async def close_position(self, symbol: str) -> Order:
@@ -246,6 +261,24 @@ class PacificaExchange(ExchangeBase):
                 unrealized_pnl=Decimal(str(p.get("unrealized_pnl", 0)))
             ))
         return positions
+
+    async def get_funding_rate(self, symbol: str) -> Decimal:
+        """Fetch funding rate from /info endpoint if available."""
+        normalized_symbol = symbol.upper()
+        if not normalized_symbol.endswith("-PERP"):
+            normalized_symbol = f"{normalized_symbol}-PERP"
+        try:
+            resp = await self._request("GET", "/info")
+            instruments = resp.get("data", [])
+            if isinstance(instruments, list):
+                for item in instruments:
+                    if item.get("symbol") == normalized_symbol:
+                        # Depending on Pacifica's exact response structure, usually 'funding_rate' or 'funding'
+                        return Decimal(str(item.get("funding_rate", 0)))
+        except Exception as e:
+            logger.warning(f"Pacifica get_funding_rate failed: {e}")
+            
+        return Decimal("0.0")
 
     async def get_points(self) -> Decimal:
         try:

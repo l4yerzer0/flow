@@ -11,10 +11,19 @@ class ExchangeConfig(BaseModel):
 
 class StrategySettings(BaseModel):
     target_size_usd: float = 1000.0
-
+    max_concurrent_trades: int = 1
+    target_session_volume: float = 0.0 # 0 means infinite
+    balance_percent: float = 0.0 # 0 means use target_size_usd
+    min_position_size: float = 11.0 # Minimum allowed size per leg
+    min_spread_bps: float = 15.0 # Minimum spread in bps to enter trade
 
 class StrategySettingsOverride(BaseModel):
     target_size_usd: Optional[float] = None
+    max_concurrent_trades: Optional[int] = None
+    target_session_volume: Optional[float] = None
+    balance_percent: Optional[float] = None
+    min_position_size: Optional[float] = None
+    min_spread_bps: Optional[float] = None
 
     def apply_to(self, base: StrategySettings) -> StrategySettings:
         data = base.model_dump()

@@ -48,7 +48,14 @@ class ExchangeBase(ABC):
         pass
 
     @abstractmethod
-    async def open_position(self, symbol: str, side: str, amount: Decimal) -> Order:
+    async def open_position(
+        self, 
+        symbol: str, 
+        side: str, 
+        amount: Decimal, 
+        price: Optional[Decimal] = None, 
+        order_type: str = 'market'
+    ) -> Order:
         """Open a position (Long/Short)."""
         pass
 
@@ -60,6 +67,11 @@ class ExchangeBase(ABC):
     @abstractmethod
     async def get_positions(self) -> List[Position]:
         """Get all open positions."""
+        pass
+
+    @abstractmethod
+    async def get_funding_rate(self, symbol: str) -> Decimal:
+        """Get current funding rate (1h or 8h depending on exchange)."""
         pass
 
     @abstractmethod

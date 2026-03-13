@@ -71,8 +71,39 @@ class BotInstance:
         self.strategy = DeltaNeutralStrategy(self.ex_a, self.ex_b)
         self.strategy.target_size_usd = Decimal(str(settings.target_size_usd))
         
+        # Strategy Parameters from config
+        if hasattr(settings, 'min_spread_bps'):
+            self.strategy.min_spread_bps = Decimal(str(settings.min_spread_bps))
+        else:
+            self.strategy.min_spread_bps = Decimal("15.0")
+            
+        if hasattr(settings, 'max_concurrent_trades'):
+            self.strategy.max_concurrent_trades = settings.max_concurrent_trades
+        else:
+            self.strategy.max_concurrent_trades = 1
+            
+        if hasattr(settings, 'target_session_volume'):
+            self.strategy.target_session_volume = Decimal(str(settings.target_session_volume))
+        if hasattr(settings, 'balance_percent'):
+            self.strategy.balance_percent = Decimal(str(settings.balance_percent))
+        if hasattr(settings, 'min_position_size'):
+            self.strategy.min_position_size = Decimal(str(settings.min_position_size))
+            
+        # Give strategy access to balances
+        self.strategy.get_balance_a = lambda: self.bal_a
+        self.strategy.get_balance_b = lambda: self.bal_b
+        
+        # Give strategy a way to stop the bot when session volume is reached
+        self.strategy.stop_bot_callback = lambda: asyncio.create_task(self.stop())
+            
+        # Set a realistic take profit based on target size
+        self.strategy.take_profit_usd = self.strategy.target_size_usd * Decimal("0.002") # 0.2% default
+        
         self.running = False
         self.task: asyncio.Task = None
+
+    def set_log_callback(self, callback):
+        self.strategy.log_callback = callback
 
     async def update_balances(self, force=False):
         """Smart update balances: fast if trading, slow if idle/disabled."""
@@ -146,12 +177,8 @@ class BotInstance:
         await self.ex_b.connect()
         await self.update_market_universe(force=True, shared_markets_by_exchange=shared_markets_by_exchange)
 
-        selected_underlying = self.strategy.symbol.upper().replace("-PERP", "")
-        if selected_underlying not in self.common_assets:
-            print(
-                f"Warning: Symbol '{self.strategy.symbol}' is not in common market universe "
-                f"for account '{self.config.name}'. Common assets count: {len(self.common_assets)}"
-            )
+        # Pass available markets to the strategy
+        self.strategy.available_symbols = [f"{a}-PERP" for a in self.common_assets]
         
         # Start Strategy Loop
         self.task = asyncio.create_task(self.strategy.run_loop())
@@ -177,9 +204,15 @@ class BotManager:
         self.shared_markets_updated_at = 0.0
         self.shared_markets_ttl_sec = 300.0
         self._shared_markets_lock = asyncio.Lock()
+        self.log_callback = None
         self._ensure_default_profiles()
 
         self._initialize_bots()
+        
+    def set_log_callback(self, callback):
+        self.log_callback = callback
+        for bot in self.bots:
+            bot.set_log_callback(lambda msg, color="white": self.log_callback(f"[{bot.config.name}] {msg}", color) if self.log_callback else None)
 
     def _ensure_default_profiles(self):
         if self.config.settings_profiles:

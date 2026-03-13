@@ -1,1 +1,24 @@
 [16:31:08] Startup Error: 'VariationalExchange' object has no attribute '_apply_token'
+[14:31:21] Запустить: смерть в нищите
+[14:34:57] Остановить: смерть в нищите
+[14:51:02] Запустить: смерть в нищите
+[14:56:23] Остановить: смерть в нищите
+[15:17:56] Запустить: смерть в нищите
+[15:17:57] смерть в нищите Strategy loop started. Max concurrent trades: 1
+[15:20:46] Остановить: смерть в нищите
+[20:28:48] Запустить: смерть в нищите
+[20:28:49] смерть в нищите Strategy loop started. Max concurrent trades: 1
+[20:28:49] смерть в нищите Scanning 40 symbols...
+[20:28:51] смерть в нищите 2Z-PERP Fetch error: Pacifica API Error: 404 - {"success":false,"data":null,"error":"Not found","code":404}
+[20:29:25] смерть в нищите DOGE-PERP Fetch error: Pacifica API Error: 404 - {"success":false,"data":null,"error":"Not found","code":404}
+[20:29:55] смерть в нищите MON-PERP Fetch error: Pacifica API Error: 404 - {"success":false,"data":null,"error":"Not found","code":404}
+[20:30:22] смерть в нищите VIRTUAL-PERP Fetch error: Pacifica API Error: 404 - {"success":false,"data":null,"error":"Not found","code":404}
+[20:30:33] Остановить: смерть в нищите
+[22:01:03] Запустить: смерть в нищите
+[22:01:05] смерть в нищите Strategy loop started. Max concurrent trades: 1
+[22:01:05] смерть в нищите Scanning 40 symbols...
+[22:01:07] смерть в нищите 2Z-PERP Zero price detected. A: 0.0, B: 0
+[22:38:28] Запустить: смерть в нищите
+[22:38:30] смерть в нищите Strategy loop started. Max concurrent trades: 1
+[22:38:30] смерть в нищите Scanning 40 symbols...
+[22:38:37] смерть в нищите 2Z-PERP Zero price detected. A: 0.0, B: 0

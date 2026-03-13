@@ -61,7 +61,7 @@ def ui_t(key: str) -> str:
         "profile_edit_title": "Редактировать профиль",
         "profile_id_label": "Profile ID",
         "profile_name_label": "Profile Name",
-        "max_spread_label": "Max Spread (bps)",
+        "max_spread_label": "Min Spread (bps)",
         "rebalance_label": "Rebalance Interval (sec)",
         "invalid_profile_numbers": "Неверное числовое значение в профиле",
         "profile_id_required": "Profile ID is required",
@@ -75,6 +75,10 @@ def ui_t(key: str) -> str:
         "target_override_placeholder": "Пусто = значение из профиля",
         "select_profile_required": "Выберите профиль настроек",
         "proxy_label": "Прокси (http://user:pass@host:port)",
+        "max_concurrent_trades_label": "Макс. одновр. сделок",
+        "target_session_volume_label": "Целевой объем сессии (USD)",
+        "balance_percent_label": "% от баланса на сделку",
+        "min_position_size_label": "Мин. размер позиции (USD)",
     }
     extra_en = {
         "profiles_tab": "Profiles",
@@ -92,7 +96,7 @@ def ui_t(key: str) -> str:
         "profile_edit_title": "Edit Profile",
         "profile_id_label": "Profile ID",
         "profile_name_label": "Profile Name",
-        "max_spread_label": "Max Spread (bps)",
+        "max_spread_label": "Min Spread (bps)",
         "rebalance_label": "Rebalance Interval (sec)",
         "invalid_profile_numbers": "Invalid numeric value in profile fields",
         "profile_id_required": "Profile ID is required",
@@ -106,6 +110,10 @@ def ui_t(key: str) -> str:
         "target_override_placeholder": "Leave blank to use profile value",
         "select_profile_required": "Select a settings profile",
         "proxy_label": "Proxy (http://user:pass@host:port)",
+        "max_concurrent_trades_label": "Max Concurrent Trades",
+        "target_session_volume_label": "Target Session Vol (USD)",
+        "balance_percent_label": "Trade Size (% of balance)",
+        "min_position_size_label": "Min Position Size (USD)",
     }
     extra = extra_ru if i18n.lang == "ru" else extra_en
     return extra.get(key, table.get(key, key))
@@ -380,29 +388,73 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
             title = ui_t("profile_edit_title") if self.profile else ui_t("profile_add_title")
             yield Label(title, id="dialog-title")
 
-            with ScrollableContainer():
-                with Vertical(classes="input-group"):
-                    yield Label(ui_t("profile_id_label"), classes="field-label")
-                    yield Input(
-                        id="profile-id",
-                        placeholder="e.g. scalp",
-                        value=self.profile.id if self.profile else "",
-                        disabled=self.profile is not None,
-                    )
-                with Vertical(classes="input-group"):
-                    yield Label(ui_t("profile_name_label"), classes="field-label")
-                    yield Input(
-                        id="profile-name",
-                        placeholder="e.g. Scalping",
-                        value=self.profile.name if self.profile else "",
-                    )
-                with Vertical(classes="input-group"):
-                    yield Label(i18n.t("target_size_usd"), classes="field-label")
-                    yield Input(
-                        id="profile-target-size",
-                        placeholder="1000",
-                        value=str(self.profile.settings.target_size_usd) if self.profile else "1000",
-                    )
+            with ScrollableContainer(id="profile-scroll-container"):
+                container_type = Vertical if is_mobile() else Horizontal
+                
+                with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("profile_id_label"), classes="field-label")
+                        yield Input(
+                            id="profile-id",
+                            placeholder="e.g. scalp",
+                            value=self.profile.id if self.profile else "",
+                            disabled=self.profile is not None,
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("profile_name_label"), classes="field-label")
+                        yield Input(
+                            id="profile-name",
+                            placeholder="e.g. Scalping",
+                            value=self.profile.name if self.profile else "",
+                        )
+
+                with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group"):
+                        yield Label(i18n.t("target_size_usd"), classes="field-label")
+                        yield Input(
+                            id="profile-target-size",
+                            placeholder="1000",
+                            value=str(self.profile.settings.target_size_usd) if self.profile else "1000",
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("max_concurrent_trades_label"), classes="field-label")
+                        yield Input(
+                            id="profile-max-trades",
+                            placeholder="1",
+                            value=str(self.profile.settings.max_concurrent_trades) if self.profile else "1",
+                        )
+
+                with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("target_session_volume_label"), classes="field-label")
+                        yield Input(
+                            id="profile-session-volume",
+                            placeholder="0",
+                            value=str(self.profile.settings.target_session_volume) if self.profile else "0",
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("balance_percent_label"), classes="field-label")
+                        yield Input(
+                            id="profile-balance-percent",
+                            placeholder="0",
+                            value=str(self.profile.settings.balance_percent) if self.profile else "0",
+                        )
+
+                with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("min_position_size_label"), classes="field-label")
+                        yield Input(
+                            id="profile-min-size",
+                            placeholder="11",
+                            value=str(self.profile.settings.min_position_size) if self.profile else "11",
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("max_spread_label"), classes="field-label")
+                        yield Input(
+                            id="profile-min-spread",
+                            placeholder="15.0",
+                            value=str(self.profile.settings.min_spread_bps) if self.profile else "15.0",
+                        )
 
             with Horizontal(id="dialog-buttons"):
                 yield Button(i18n.t("cancel"), id="btn-profile-cancel", variant="error")
@@ -421,6 +473,11 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
             profile_id = self.query_one("#profile-id", Input).value.strip()
             name = self.query_one("#profile-name", Input).value.strip()
             target_size = float(self.query_one("#profile-target-size", Input).value.strip())
+            max_trades = int(self.query_one("#profile-max-trades", Input).value.strip())
+            session_vol = float(self.query_one("#profile-session-volume", Input).value.strip())
+            bal_pct = float(self.query_one("#profile-balance-percent", Input).value.strip())
+            min_size = float(self.query_one("#profile-min-size", Input).value.strip())
+            min_spread = float(self.query_one("#profile-min-spread", Input).value.strip())
         except ValueError:
             self.app.notify(ui_t("invalid_profile_numbers"), severity="error")
             return
@@ -437,6 +494,11 @@ class ProfileSettingsScreen(ModalScreen[SettingsProfile | None]):
             name=name,
             settings=StrategySettings(
                 target_size_usd=target_size,
+                max_concurrent_trades=max_trades,
+                target_session_volume=session_vol,
+                balance_percent=bal_pct,
+                min_position_size=min_size,
+                min_spread_bps=min_spread,
             ),
         )
         self.dismiss(profile)
@@ -487,6 +549,52 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                         )
                 
                 with container_type(classes="dialog-row"):
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("target_session_volume_label"), classes="field-label")
+                        yield Input(
+                            placeholder=ui_t("target_override_placeholder"),
+                            id="acc-session-vol", 
+                            value=(
+                                str(self.account.settings_override.target_session_volume)
+                                if self.account and self.account.settings_override.target_session_volume is not None
+                                else ""
+                            )
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("balance_percent_label"), classes="field-label")
+                        yield Input(
+                            placeholder=ui_t("target_override_placeholder"),
+                            id="acc-bal-pct", 
+                            value=(
+                                str(self.account.settings_override.balance_percent)
+                                if self.account and self.account.settings_override.balance_percent is not None
+                                else ""
+                            )
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("min_position_size_label"), classes="field-label")
+                        yield Input(
+                            placeholder=ui_t("target_override_placeholder"),
+                            id="acc-min-size", 
+                            value=(
+                                str(self.account.settings_override.min_position_size)
+                                if self.account and self.account.settings_override.min_position_size is not None
+                                else ""
+                            )
+                        )
+                    with Vertical(classes="input-group"):
+                        yield Label(ui_t("max_spread_label"), classes="field-label")
+                        yield Input(
+                            placeholder=ui_t("target_override_placeholder"),
+                            id="acc-min-spread", 
+                            value=(
+                                str(self.account.settings_override.min_spread_bps)
+                                if self.account and self.account.settings_override.min_spread_bps is not None
+                                else ""
+                            )
+                        )
+
+                with container_type(classes="dialog-row"):
                     with Vertical(classes="input-group", id="acc-proxy-group"):
                         yield Label(ui_t("proxy_label"), classes="field-label")
                         yield Input(
@@ -521,8 +629,20 @@ class AccountSettingsScreen(ModalScreen[AccountConfig]):
                 try:
                     size_val = self.query_one("#acc-size", Input).value
                     size = float(size_val) if size_val.strip() else None
+                    
+                    vol_val = self.query_one("#acc-session-vol", Input).value
+                    session_vol = float(vol_val) if vol_val.strip() else None
+                    
+                    bal_val = self.query_one("#acc-bal-pct", Input).value
+                    bal_pct = float(bal_val) if bal_val.strip() else None
+                    
+                    min_val = self.query_one("#acc-min-size", Input).value
+                    min_size = float(min_val) if min_val.strip() else None
+                    
+                    spread_val = self.query_one("#acc-min-spread", Input).value
+                    min_spread = float(spread_val) if spread_val.strip() else None
                 except ValueError:
-                    self.app.notify("Invalid target size", severity="error")
+                    self.app.notify("Invalid numeric override value", severity="error")
                     return
                 profile_id = self.query_one("#acc-profile", Select).value
                 if not isinstance(profile_id, str) or not profile_id:
@@ -805,6 +925,7 @@ class Flow(App):
     def __init__(self):
         super().__init__()
         self.manager: BotManager | None = None
+        self.selected_indices = set()
         # Create logs directory if not exists
         os.makedirs("logs", exist_ok=True)
         self.log_file = open("logs/debug.log", "a", encoding="utf-8")
@@ -817,7 +938,9 @@ class Flow(App):
         self.log_file.flush()
         
         if hasattr(self, "log_widget"):
-            self.log_widget.write(f"[{color}]{message}[/]")
+            from rich.markup import escape
+            safe_msg = escape(message)
+            self.log_widget.write(f"[{color}]{safe_msg}[/]")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -889,6 +1012,7 @@ class Flow(App):
         try:
             initialize_master_password(password)
             self.manager = BotManager()
+            self.manager.set_log_callback(self.log_message)
             self._refresh_accounts_table()
             self._refresh_profiles_table()
             # await self.manager.start_all()  <-- Removed automatic start
@@ -993,12 +1117,15 @@ class Flow(App):
                     state_key = f"state_{bot.strategy.state.value.lower()}"
                     translated_state = i18n.t(state_key)
                     
+                    # Each active trade is a pair of positions
+                    positions_count = len(bot.strategy.trades) * 2
+                    
                     table.add_row(
                         bot.config.name,
                         bal_str,
                         f"[{status_style}]{translated_state}[/]",
                         f"${pnl:.2f}",
-                        "2" if bot.strategy.state == StrategyState.HEDGED else "0"
+                        str(positions_count)
                     )
 
                 # 2. Update Stats (Dashboard Summary)
@@ -1125,7 +1252,7 @@ class Flow(App):
             if table.cursor_row is not None:
                 idx = table.cursor_row
                 acc = self.manager.config.accounts[idx]
-                self.log_widget.write(f"[green]{i18n.t('btn_start')}: {acc.name}[/]")
+                self.log_message(f"{i18n.t('btn_start')}: {acc.name}", color="green")
                 asyncio.create_task(self.manager.start_account(idx))
                 
         elif event.button.id == "btn-stop-account":
@@ -1133,7 +1260,7 @@ class Flow(App):
             if table.cursor_row is not None:
                 idx = table.cursor_row
                 acc = self.manager.config.accounts[idx]
-                self.log_widget.write(f"[red]{i18n.t('btn_stop')}: {acc.name}[/]")
+                self.log_message(f"{i18n.t('btn_stop')}: {acc.name}", color="red")
                 asyncio.create_task(self.manager.stop_account(idx))
 
         elif event.button.id == "btn-edit-account":
@@ -1145,7 +1272,7 @@ class Flow(App):
                 def edit_account_callback(new_acc: AccountConfig | None) -> None:
                     if new_acc:
                         self.manager.update_account(idx, new_acc)
-                        self.log_widget.write(f"[yellow]{i18n.t('edit_account')}: {new_acc.name}[/]")
+                        self.log_message(f"{i18n.t('edit_account')}: {new_acc.name}", color="yellow")
                         self._refresh_accounts_table()
                 
                 self.push_screen(
@@ -1157,8 +1284,9 @@ class Flow(App):
             table = self.query_one("#accounts-config-table", DataTable)
             if table.cursor_row is not None:
                 idx = table.cursor_row
+                acc = self.manager.config.accounts[idx]
                 self.manager.remove_account(idx)
-                self.log_widget.write(f"[red]{i18n.t('remove_selected')}[/]")
+                self.log_message(f"{i18n.t('remove_selected')}: {acc.name}", color="red")
                 self._refresh_accounts_table()
 
         elif event.button.id == "btn-add-profile":
@@ -1272,8 +1400,7 @@ class Flow(App):
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
-        if self.manager is None:
-            return
+        if self.manager is None: return
         if event.data_table.id == "accounts-config-table":
             self.query_one("#btn-remove-account").disabled = False
             self.query_one("#btn-edit-account").disabled = False
