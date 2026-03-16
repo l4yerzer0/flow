@@ -169,9 +169,8 @@ class PacificaExchange(ExchangeBase):
         return Decimal(str(total_val))
 
     async def get_price(self, symbol: str) -> Decimal:
-        normalized_symbol = symbol.upper()
-        if not normalized_symbol.endswith("-PERP"):
-            normalized_symbol = f"{normalized_symbol}-PERP"
+        # Internally we use BTC-PERP, but API might use just BTC
+        clean_symbol = symbol.replace("-PERP", "").upper()
 
         # Primary endpoint from Pacifica docs.
         try:
@@ -179,8 +178,10 @@ class PacificaExchange(ExchangeBase):
             prices = resp.get("data", [])
             if isinstance(prices, list):
                 for item in prices:
-                    if item.get("symbol") == normalized_symbol:
-                        return Decimal(str(item.get("price", 0)))
+                    item_sym = str(item.get("symbol", "")).upper()
+                    if item_sym == clean_symbol or item_sym == f"{clean_symbol}-PERP":
+                        # Use 'mark' or 'mid' price
+                        return Decimal(str(item.get("mark") or item.get("price") or item.get("mid") or 0))
         except Exception as e:
             logger.warning(f"Pacifica /info/prices failed: {e}")
 

@@ -181,15 +181,13 @@ class VariationalExchange(ExchangeBase):
         return Decimal(str(equity))
 
     async def get_price(self, symbol: str) -> Decimal:
+        clean_symbol = symbol.replace("-PERP", "").upper()
         try:
             # Endpoint from old connector: /metadata/stats (Public)
             data = await self._request("GET", "/metadata/stats", is_public=True)
-            ticker = symbol
-            if not ticker.endswith("-PERP"):
-                ticker = f"{ticker}-PERP"
-                
             for m in data.get("listings", []):
-                if m.get("ticker") == ticker:
+                ticker = str(m.get("ticker", "")).upper()
+                if ticker == clean_symbol or ticker == f"{clean_symbol}-PERP":
                     return Decimal(str(m.get("mark_price", 0.0)))
             return Decimal("0.0")
         except Exception as e:
@@ -367,14 +365,12 @@ class VariationalExchange(ExchangeBase):
 
     async def get_funding_rate(self, symbol: str) -> Decimal:
         """Fetch funding rate from public metadata/stats endpoint."""
+        clean_symbol = symbol.replace("-PERP", "").upper()
         try:
             data = await self._request("GET", "/metadata/stats", is_public=True)
-            ticker = symbol
-            if not ticker.endswith("-PERP"):
-                ticker = f"{ticker}-PERP"
-                
             for m in data.get("listings", []):
-                if m.get("ticker") == ticker:
+                ticker = str(m.get("ticker", "")).upper()
+                if ticker == clean_symbol or ticker == f"{clean_symbol}-PERP":
                     # Often provided as 'funding_rate' or 'current_funding_rate'
                     return Decimal(str(m.get("funding_rate") or m.get("current_funding_rate") or 0.0))
             return Decimal("0.0")

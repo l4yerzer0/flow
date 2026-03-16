@@ -22,3 +22,13 @@
 [22:38:30] смерть в нищите Strategy loop started. Max concurrent trades: 1
 [22:38:30] смерть в нищите Scanning 40 symbols...
 [22:38:37] смерть в нищите 2Z-PERP Zero price detected. A: 0.0, B: 0
+[15:05:31] Запустить: смерть в нищите
+[15:05:32] смерть в нищите Strategy loop started. Max concurrent trades: 1
+[15:05:32] смерть в нищите Scanning 40 symbols...
+[15:05:46] смерть в нищите BTC-PERP Debug - P_A:73639.0958643797, P_B:73614, F_A:0.073534, F_B:0.0 -> Edge:738.75
+[15:05:50] смерть в нищите ETH-PERP Debug - P_A:2280.587088063209, P_B:2279.382, F_A:0.1095, F_B:0.0 -> Edge:1100.29
+[15:05:57] смерть в нищите HYPE-PERP Zero price detected. A: 39.44791718757814, B: 0
+[15:06:20] смерть в нищите SUI-PERP Debug - P_A:1.049107366104916, P_B:1.049584, F_A:0.1095, F_B:0.0 -> Edge:-1090.46
+[15:06:34] смерть в нищите ZRO-PERP Opportunity! Edge: 8721.04 bps. Size: $27.99
+[15:06:34] смерть в нищите ZRO-PERP Placing Maker sell on Pacifica 2 (смерть в нищите) at 2.1636
+[15:06:35] смерть в нищите ZRO-PERP Failed to open Maker: Pacifica API Error: 404 - {"success":false,"data":null,"error":"Not found","code":404}
