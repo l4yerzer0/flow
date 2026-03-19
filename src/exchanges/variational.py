@@ -214,6 +214,30 @@ class VariationalExchange(ExchangeBase):
             logger.error(f"Variational get_markets error: {e}")
             return []
 
+    async def _get_instrument_config(self, symbol: str) -> Dict[str, Any]:
+        """Fetch instrument specific config like funding_interval_s."""
+        clean_symbol = symbol.replace("-PERP", "").upper()
+        try:
+            data = await self._request("GET", "/metadata/stats", is_public=True)
+            for m in data.get("listings", []):
+                ticker = str(m.get("ticker", "")).upper()
+                if ticker == clean_symbol or ticker == f"{clean_symbol}-PERP":
+                    return {
+                        "underlying": ticker.replace("-PERP", ""),
+                        "instrument_type": "perpetual_future",
+                        "settlement_asset": "USDC",
+                        "funding_interval_s": int(m.get("funding_interval_s", 3600))
+                    }
+        except Exception:
+            pass
+        
+        return {
+            "underlying": clean_symbol,
+            "instrument_type": "perpetual_future",
+            "settlement_asset": "USDC",
+            "funding_interval_s": 3600
+        }
+
     async def open_position(
         self, 
         symbol: str, 
@@ -223,19 +247,14 @@ class VariationalExchange(ExchangeBase):
         order_type: str = 'market'
     ) -> Order:
         try:
-            underlying = symbol.replace("-PERP", "")
+            instr_config = await self._get_instrument_config(symbol)
             
             if order_type == 'limit' and price is not None:
                 limit_payload = {
                     "order_type": "limit",
                     "limit_price": str(price),
                     "side": side.lower(),
-                    "instrument": {
-                        "underlying": underlying,
-                        "instrument_type": "perpetual_future",
-                        "settlement_asset": "USDC",
-                        "funding_interval_s": 3600
-                    },
+                    "instrument": instr_config,
                     "qty": str(amount),
                     "slippage_limit": "0.005",
                     "is_auto_resize": False,
@@ -255,12 +274,7 @@ class VariationalExchange(ExchangeBase):
             # 1. Indicative Quote -> 2. Market Order
             # Request Quote
             quote_payload = {
-                "instrument": {
-                    "underlying": underlying,
-                    "funding_interval_s": 3600,
-                    "settlement_asset": "USDC",
-                    "instrument_type": "perpetual_future"
-                },
+                "instrument": instr_config,
                 "qty": str(amount)
             }
             quote_data = await self._request("POST", "/quotes/indicative", data=quote_payload)
@@ -297,14 +311,9 @@ class VariationalExchange(ExchangeBase):
                 return None
             
             # RFQ for close (reduce only)
-            underlying = symbol.replace("-PERP", "")
+            instr_config = await self._get_instrument_config(symbol)
             quote_payload = {
-                "instrument": {
-                    "underlying": underlying,
-                    "funding_interval_s": 3600,
-                    "settlement_asset": "USDC",
-                    "instrument_type": "perpetual_future"
-                },
+                "instrument": instr_config,
                 "qty": str(pos.size)
             }
             quote_data = await self._request("POST", "/quotes/indicative", data=quote_payload)
@@ -364,15 +373,20 @@ class VariationalExchange(ExchangeBase):
             return []
 
     async def get_funding_rate(self, symbol: str) -> Decimal:
-        """Fetch funding rate from public metadata/stats endpoint."""
+        """
+        Fetch funding rate from public metadata/stats endpoint.
+        Variational returns annual rate (APR), we normalize it to hourly.
+        """
         clean_symbol = symbol.replace("-PERP", "").upper()
         try:
             data = await self._request("GET", "/metadata/stats", is_public=True)
             for m in data.get("listings", []):
                 ticker = str(m.get("ticker", "")).upper()
                 if ticker == clean_symbol or ticker == f"{clean_symbol}-PERP":
-                    # Often provided as 'funding_rate' or 'current_funding_rate'
-                    return Decimal(str(m.get("funding_rate") or m.get("current_funding_rate") or 0.0))
+                    # Variational 'funding_rate' is APR (e.g. 0.1095 for 10.95% per year)
+                    # Normalize to hourly: rate / 8760
+                    annual_rate = Decimal(str(m.get("funding_rate") or m.get("current_funding_rate") or 0.0))
+                    return annual_rate / Decimal("8760")
             return Decimal("0.0")
         except Exception as e:
             logger.error(f"Variational get_funding_rate error: {e}")

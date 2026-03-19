@@ -274,8 +274,9 @@ class PacificaExchange(ExchangeBase):
             if isinstance(instruments, list):
                 for item in instruments:
                     if item.get("symbol") == normalized_symbol:
-                        # Depending on Pacifica's exact response structure, usually 'funding_rate' or 'funding'
-                        return Decimal(str(item.get("funding_rate", 0)))
+                        # Documentation says field is "funding", using "funding_rate" as fallback
+                        rate = item.get("funding") or item.get("funding_rate") or 0
+                        return Decimal(str(rate))
         except Exception as e:
             logger.warning(f"Pacifica get_funding_rate failed: {e}")
             
