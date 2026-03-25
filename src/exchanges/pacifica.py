@@ -1,8 +1,6 @@
 import json
 import time
 import asyncio
-import hmac
-import hashlib
 import ssl
 import os
 from decimal import Decimal
@@ -46,17 +44,6 @@ class PacificaExchange(ExchangeBase):
             raise ValueError("Private key (api_secret) is required for signing")
         signature_bytes = self.keypair.sign_message(message_bytes)
         return base58.b58encode(bytes(signature_bytes)).decode("utf-8")
-
-    def _verify_signature(self, pubkey_b58: str, signature_b58: str, message_bytes: bytes) -> bool:
-        try:
-            pubkey_bytes = base58.b58decode(pubkey_b58)
-            sig_bytes = base58.b58decode(signature_b58)
-            Ed25519PublicKey.from_public_bytes(pubkey_bytes).verify(sig_bytes, message_bytes)
-            return True
-        except InvalidSignature:
-            return False
-        except Exception:
-            return False
 
     def _get_signature(self, op_type: str, data: dict) -> dict:
         """

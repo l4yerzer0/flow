@@ -1,8 +1,10 @@
 from textual.app import App, ComposeResult, SystemCommand
-from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
+from textual.containers import Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Header, Footer, Static, Input, RichLog, TabbedContent, TabPane, DataTable, Label, Button, Select
 from textual.screen import ModalScreen, Screen
 from textual.command import CommandPalette
+import re
+from rich.markup import escape
 from src.core.config import AccountConfig, ExchangeConfig, SettingsProfile, StrategySettings, StrategySettingsOverride
 from src.core.bot_manager import BotManager, StrategyState, create_exchange
 from src.core.credentials import has_master_password, initialize_master_password
@@ -952,7 +954,6 @@ class Flow(App):
         # Strip only Rich formatting tags (e.g. [green], [/], [#ffffff])
         # This regex matches things like [red], [/red], [b], [/], [#abcdef]
         # and avoids stripping [AccountName]
-        import re
         clean_msg = re.sub(r"\[/?(?:[a-z]+|#\w{6})\]", "", message)
         
         # Save to internal buffer (max 2000 lines)
@@ -976,7 +977,6 @@ class Flow(App):
             pass
         
         if hasattr(self, "log_widget"):
-            from rich.markup import escape
             # If the message already contains markup, we need to handle it carefully
             if "[" in message and "]" in message:
                 # If it's already a tagged message (like from BotManager), just write it

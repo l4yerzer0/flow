@@ -61,7 +61,8 @@ class I18n:
             "state_closing": "ЗАКРЫТИЕ",
             "placeholder_cmd": "Введите команду...",
             "refresh_rate": "Частота обновления (мс)",
-            "lang_detected": "Определен язык: {lang}"
+            "lang_detected": "Определен язык: {lang}",
+            "verifying_accounts": "Проверка аккаунтов..."
         },
         "en": {
             "dashboard": "Dashboard",
@@ -120,7 +121,8 @@ class I18n:
             "state_closing": "CLOSING",
             "placeholder_cmd": "Type a command...",
             "refresh_rate": "Refresh Rate (ms)",
-            "lang_detected": "Detected language: {lang}"
+            "lang_detected": "Detected language: {lang}",
+            "verifying_accounts": "Verifying accounts..."
         }
     }
 
