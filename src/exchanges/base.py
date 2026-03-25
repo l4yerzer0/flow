@@ -83,3 +83,11 @@ class ExchangeBase(ABC):
     async def get_volumes(self) -> Dict[str, Decimal]:
         """Get volume statistics (e.g. 24h, all_time)."""
         pass
+
+    @abstractmethod
+    async def get_all_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch prices and funding rates for all markets in one/two bulk requests.
+        Returns: { 'BTC-PERP': {'price': Decimal, 'funding': Decimal}, ... }
+        """
+        pass

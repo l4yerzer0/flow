@@ -334,3 +334,39 @@ class PacificaExchange(ExchangeBase):
         except Exception as e:
             logger.error(f"Pacifica get_volumes error: {e}")
             return {"24h": Decimal("0"), "all_time": Decimal("0")}
+
+    async def get_all_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """Fetch all prices and funding rates in two bulk requests."""
+        results = {}
+        try:
+            # Parallel fetch prices and info
+            prices_resp, info_resp = await asyncio.gather(
+                self._request("GET", "/info/prices"),
+                self._request("GET", "/info")
+            )
+            
+            # Map prices
+            prices_data = prices_resp.get("data", [])
+            for p in prices_data:
+                sym = str(p.get("symbol", "")).upper()
+                if not sym.endswith("-PERP"): sym = f"{sym}-PERP"
+                price = Decimal(str(p.get("mark") or p.get("price") or p.get("mid") or 0))
+                results[sym] = {"price": price, "funding": Decimal("0")}
+
+            # Map funding
+            info_data = info_resp.get("data", [])
+            for item in info_data:
+                sym = str(item.get("symbol", "")).upper()
+                if not sym.endswith("-PERP"): sym = f"{sym}-PERP"
+                # If we don't have price for this sym yet, initialize it
+                if sym not in results:
+                    results[sym] = {"price": Decimal("0"), "funding": Decimal("0")}
+                
+                # Documentation says "funding", using "funding_rate" as fallback
+                rate = item.get("funding") or item.get("funding_rate") or 0
+                results[sym]["funding"] = Decimal(str(rate))
+                
+        except Exception as e:
+            logger.error(f"Pacifica get_all_market_data error: {e}")
+            
+        return results

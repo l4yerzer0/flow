@@ -12,3 +12,6 @@ __pycache__/
 *$py.class
 *.env
 .env
+
+# Windows reserved names
+nul

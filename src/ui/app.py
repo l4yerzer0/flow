@@ -163,8 +163,14 @@ class DashboardTab(Vertical):
         
         yield Label(i18n.t("live_bots"), classes="section-title")
         yield DataTable(id="bots-table")
-        
-        yield Label(i18n.t("global_feed"), classes="section-title")
+
+class LogTab(Vertical):
+    """Full-screen event log."""
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="log-header"):
+            yield Label(i18n.t("global_feed"), classes="section-title")
+            yield Button(i18n.t("copy_logs"), id="btn-copy-logs", variant="default")
+            yield Button(i18n.t("open_log_file"), id="btn-open-log", variant="default")
         yield RichLog(id="feed-log", markup=True, wrap=True)
 
 class AccountsTab(ScrollableContainer):
@@ -764,9 +770,17 @@ class Flow(App):
         padding: 0 1;
         border-left: thick #3b82f6;
     }
+    #log-header {
+        height: auto;
+        align: left middle;
+    }
+    #log-header Button {
+        margin-left: 2;
+        min-width: 20;
+    }
     RichLog {
         height: 1fr;
-        border: round #334155;
+        border: thick #3b82f6;
         background: #0f172a;
         padding: 0 1;
         margin-top: 1;
@@ -926,27 +940,59 @@ class Flow(App):
         super().__init__()
         self.manager: BotManager | None = None
         self.selected_indices = set()
+        self._log_history = []  # Keep track of logs for copying
         # Create logs directory if not exists
         os.makedirs("logs", exist_ok=True)
-        self.log_file = open("logs/debug.log", "a", encoding="utf-8")
+        self.log_file = open("logs/debug.log", "w", encoding="utf-8")
 
     def log_message(self, message: str, color: str = "white"):
         """Write to UI log and persistent file."""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        clean_msg = message.replace("[", "").replace("]", "").split("/")[-1] # Simple strip for file
-        self.log_file.write(f"[{timestamp}] {clean_msg}\n")
-        self.log_file.flush()
+        
+        # Strip only Rich formatting tags (e.g. [green], [/], [#ffffff])
+        # This regex matches things like [red], [/red], [b], [/], [#abcdef]
+        # and avoids stripping [AccountName]
+        import re
+        clean_msg = re.sub(r"\[/?(?:[a-z]+|#\w{6})\]", "", message)
+        
+        # Save to internal buffer (max 2000 lines)
+        self._log_history.append(f"[{timestamp}] {clean_msg}")
+        if len(self._log_history) > 2000:
+            self._log_history.pop(0)
+
+        # Write to file
+        try:
+            if hasattr(self, 'log_file') and self.log_file and not self.log_file.closed:
+                self.log_file.write(f"[{timestamp}] {clean_msg}\n")
+                self.log_file.flush()
+            else:
+                # Fallback: open file in append mode
+                log_path = "logs/debug.log"
+                os.makedirs("logs", exist_ok=True)
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{timestamp}] {clean_msg}\n")
+        except Exception as e:
+            # Silent fail to avoid breaking the UI
+            pass
         
         if hasattr(self, "log_widget"):
             from rich.markup import escape
-            safe_msg = escape(message)
-            self.log_widget.write(f"[{color}]{safe_msg}[/]")
+            # If the message already contains markup, we need to handle it carefully
+            if "[" in message and "]" in message:
+                # If it's already a tagged message (like from BotManager), just write it
+                # But we escape it first to avoid unintentional markup injection from data
+                safe_msg = escape(message)
+                self.log_widget.write(f"[{color}]{safe_msg}[/]")
+            else:
+                self.log_widget.write(f"[{color}]{escape(message)}[/]")
 
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent():
             with TabPane(i18n.t("dashboard"), id="tab-dashboard"):
                 yield DashboardTab()
+            with TabPane(i18n.t("logs"), id="tab-logs"):
+                yield LogTab()
             with TabPane(i18n.t("accounts"), id="tab-accounts"):
                 yield AccountsTab()
             with TabPane(ui_t("profiles_tab"), id="tab-profiles"):
@@ -962,7 +1008,7 @@ class Flow(App):
         self.COMMAND_PALETTE_PLACEHOLDER = i18n.t("placeholder_cmd")
 
         self.log_widget = self.query_one("#feed-log", RichLog)
-        self.log_widget.write(i18n.t("system_init"))
+        self.log_message(i18n.t("system_init"), "blue")
         
         # Setup Tables
         table = self.query_one("#bots-table", DataTable)
@@ -1081,8 +1127,13 @@ class Flow(App):
         self.call_after_refresh(self._focus_command_palette_input)
 
     async def update_loop(self):
+        loop_counter = 0
         while True:
             try:
+                if loop_counter % 60 == 0:
+                    self.log_message("UI Heartbeat: Application is running", "dim")
+                loop_counter += 1
+                
                 if self.manager is None:
                     await asyncio.sleep(0.5)
                     continue
@@ -1228,8 +1279,8 @@ class Flow(App):
             except Exception as e:
                 import traceback
                 error_details = traceback.format_exc()
-                self.log_widget.write(f"[red]UI Update Error: {str(e)}[/]")
-                self.log_widget.write(f"[dim red]{error_details}[/]")
+                self.log_message(f"UI Update Error: {str(e)}", "red")
+                self.log_message(error_details, "dim red")
 
             await asyncio.sleep(1.0)
 
@@ -1242,7 +1293,7 @@ class Flow(App):
             def add_account_callback(new_acc: AccountConfig | None) -> None:
                 if new_acc:
                     self.manager.add_account(new_acc)
-                    self.log_widget.write(f"[blue]{i18n.t('add_account')}: {new_acc.name}[/]")
+                    self.log_message(f"{i18n.t('add_account')}: {new_acc.name}", "blue")
                     self._refresh_accounts_table()
             
             self.push_screen(AccountSettingsScreen(self.manager.config.settings_profiles), add_account_callback)
@@ -1334,6 +1385,30 @@ class Flow(App):
                     self._refresh_accounts_table()
                 except ValueError as e:
                     self.notify(str(e), severity="error")
+        
+        elif event.button.id == "btn-copy-logs":
+            if self._log_history:
+                full_text = "\n".join(self._log_history)
+                try:
+                    import pyperclip
+                    pyperclip.copy(full_text)
+                    self.notify(i18n.t("logs_copied"), severity="information")
+                except ImportError:
+                    # Fallback: save to temp file and notify user
+                    temp_path = os.path.abspath("logs/logs_copy.txt")
+                    with open(temp_path, "w", encoding="utf-8") as f:
+                        f.write(full_text)
+                    self.notify(f"Logs saved to {temp_path}", severity="information")
+                except Exception as e:
+                    self.notify(f"Error copying logs: {e}", severity="error")
+        
+        elif event.button.id == "btn-open-log":
+            try:
+                log_path = os.path.abspath("logs/debug.log")
+                if os.path.exists(log_path):
+                    os.startfile(log_path)
+            except Exception as e:
+                self.notify(f"Error opening log: {e}", severity="error")
 
     def _refresh_accounts_table(self):
         """Force immediate refresh of the accounts table with current data."""

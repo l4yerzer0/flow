@@ -415,3 +415,27 @@ class VariationalExchange(ExchangeBase):
         except Exception as e:
             logger.error(f"Variational get_volumes error: {e}")
             return {"24h": Decimal("0"), "all_time": Decimal("0")}
+
+    async def get_all_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """Fetch all prices and funding rates in one bulk request."""
+        results = {}
+        try:
+            data = await self._request("GET", "/metadata/stats", is_public=True)
+            for m in data.get("listings", []):
+                sym = str(m.get("ticker", "")).upper()
+                if not sym: continue
+                if not sym.endswith("-PERP"): sym = f"{sym}-PERP"
+                
+                price = Decimal(str(m.get("mark_price", 0.0)))
+                # Normalize annual to hourly
+                annual_rate = Decimal(str(m.get("funding_rate") or m.get("current_funding_rate") or 0.0))
+                hourly_funding = annual_rate / Decimal("8760")
+                
+                results[sym] = {
+                    "price": price,
+                    "funding": hourly_funding
+                }
+        except Exception as e:
+            logger.error(f"Variational get_all_market_data error: {e}")
+            
+        return results

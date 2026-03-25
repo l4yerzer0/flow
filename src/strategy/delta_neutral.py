@@ -147,47 +147,52 @@ class DeltaNeutralStrategy:
             await asyncio.sleep(1)
 
     async def _scan_for_opportunities(self):
-        """Scan all available symbols to find the best spread."""
-        best_edge = Decimal("-9999.0")
+        """Main scanning loop with bulk data fetching."""
         best_sym = None
+        best_edge = Decimal("-999999.0")
         best_data = None
-        
+
         # We only check symbols not currently trading
         symbols_to_check = [s for s in self.available_symbols if s not in self.trades]
         
         if not symbols_to_check:
             return
 
-        # Added heartbeat to show scanning is happening
+        # Added heartbeat
         if getattr(self, '_scan_counter', 0) % 10 == 0:
-            self._log(f"Scanning {len(symbols_to_check)} symbols...", "dim")
+            self._log(f"Scanning {len(symbols_to_check)} symbols (Bulk Mode)...", "dim")
         self._scan_counter = getattr(self, '_scan_counter', 0) + 1
 
-        for sym in symbols_to_check:
-            # Short sleep to prevent rate limits during heavy scanning
-            await asyncio.sleep(0.1)
-            try:
-                results = await asyncio.gather(
-                    self.ex_a.get_price(sym),
-                    self.ex_b.get_price(sym),
-                    self.ex_a.get_funding_rate(sym),
-                    self.ex_b.get_funding_rate(sym),
-                    return_exceptions=True
-                )
-                
-                if any(isinstance(r, Exception) for r in results):
-                    if getattr(self, '_err_counter', 0) % 50 == 0:
-                        labels = ["A_Price", "B_Price", "A_Fund", "B_Fund"]
-                        err_msgs = [f"{labels[i]}: {r}" for i, r in enumerate(results) if isinstance(r, Exception)]
-                        self._log(f"[{sym}] Fetch error: {', '.join(err_msgs)}", "dim")
-                    self._err_counter = getattr(self, '_err_counter', 0) + 1
-                    continue
+        try:
+            # Bulk fetch from both exchanges
+            data_results = await asyncio.gather(
+                self.ex_a.get_all_market_data(),
+                self.ex_b.get_all_market_data(),
+                return_exceptions=True
+            )
+            
+            if any(isinstance(r, Exception) for r in data_results):
+                self._log(f"Bulk fetch error: {data_results}", "dim")
+                return
 
-                price_a, price_b, fund_a, fund_b = results
+            data_a, data_b = data_results
+
+            for sym in symbols_to_check:
+                # Ensure symbol has -PERP suffix for lookup
+                lookup_sym = sym if sym.endswith("-PERP") else f"{sym}-PERP"
+                
+                m_a = data_a.get(lookup_sym)
+                m_b = data_b.get(lookup_sym)
+                
+                if not m_a or not m_b:
+                    continue
+                
+                price_a = m_a["price"]
+                price_b = m_b["price"]
+                fund_a = m_a["funding"]
+                fund_b = m_b["funding"]
+
                 if price_a == 0 or price_b == 0: 
-                    if getattr(self, '_zero_price_counter', 0) % 50 == 0:
-                        self._log(f"[{sym}] Zero price detected. A: {price_a}, B: {price_b}", "dim")
-                    self._zero_price_counter = getattr(self, '_zero_price_counter', 0) + 1
                     continue
 
                 spread_pct = abs(price_a - price_b) / min(price_a, price_b)
@@ -201,18 +206,18 @@ class DeltaNeutralStrategy:
                 net_funding_bps = net_funding * 10000
                 effective_edge_bps = spread_bps + net_funding_bps
                 
-                # Debug logging to see exactly what the bot sees
+                # Debug logging for major pairs
                 if getattr(self, '_scan_counter', 0) % 20 == 1 and sym in ["BTC-PERP", "ETH-PERP", "SUI-PERP"]:
-                    self._log(f"[{sym}] Debug - P_A:{price_a}, P_B:{price_b}, F_A:{fund_a}, F_B:{fund_b} -> Edge:{effective_edge_bps:.2f}", "dim")
+                    self._log(f"[{sym}] Debug - P_A:{price_a}, P_B:{price_b}, F_A:{fund_a:.6f}, F_B:{fund_b:.6f} -> Edge:{effective_edge_bps:.2f}", "dim")
 
                 if effective_edge_bps > best_edge:
                     best_edge = effective_edge_bps
                     best_sym = sym
                     best_data = (price_a, price_b)
                     
-            except Exception as e:
-                self._log(f"[{sym}] Scan exception: {e}", "red")
-                continue
+        except Exception as e:
+            self._log(f"Scan loop exception: {e}", "red")
+            return
 
         # If best edge meets criteria, execute
         if best_sym and best_edge >= (self.min_spread_bps + self.fee_rate_bps):
