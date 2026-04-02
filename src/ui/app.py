@@ -1146,7 +1146,12 @@ class Flow(App):
                     await asyncio.gather(*tasks)
                 
                 # 1. Update Dashboard Table (Only running bots)
-                table = self.query_one("#bots-table", DataTable)
+                try:
+                    table = self.query_one("#bots-table", DataTable)
+                except Exception:
+                    await asyncio.sleep(0.5)
+                    continue
+                
                 total_pnl = Decimal("0.0")
                 active_count = 0
                 

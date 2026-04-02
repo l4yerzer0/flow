@@ -194,6 +194,14 @@ class BotInstance:
                 pass
             self.task = None
 
+        # Clean up exchange connections
+        try:
+            await self.ex_a.disconnect()
+            await self.ex_b.disconnect()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error disconnecting exchanges for {self.config.name}: {e}")
+
 class BotManager:
     """Manages all bot instances."""
     def __init__(self, config_path: str = "config/accounts.json"):

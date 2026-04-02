@@ -1,2 +1,69 @@
-[15:20:29] [bold green]Система инициализирована.[/] Аккаунты загружены.
-[15:20:40] UI Heartbeat: Application is running
+[16:24:14] [bold green]Система инициализирована.[/] Аккаунты загружены.
+[16:24:20] UI Heartbeat: Application is running
+[16:24:30] UI Update Error: Pacifica API Error: Timeout
+[16:24:30] Traceback (most recent call last):
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\client.py", line 779, in _request
+    resp = await handler(req)
+           ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\client.py", line 734, in _connect_and_send_request
+    conn = await self._connector.connect(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\connector.py", line 672, in connect
+    proto = await self._create_connection(req, traces, timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\connector.py", line 1239, in _create_connection
+    _, proto = await self._create_direct_connection(req, traces, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\connector.py", line 1562, in _create_direct_connection
+    hosts = await self._resolve_host(host, port, traces=traces)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\connector.py", line 1178, in _resolve_host
+    return await asyncio.shield(resolved_host_task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\1\Desktop\Flow\src\exchanges\pacifica.py", line 167, in _request
+    async with self._session.request(method, url, **kwargs) as resp:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\client.py", line 1510, in __aenter__
+    self._resp: _RetType = await self._coro
+                           ^^^^^^^^^^^^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\client.py", line 624, in _request
+    with timer:
+         ^^^^^
+  File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\helpers.py", line 713, in __exit__
+    raise asyncio.TimeoutError from exc_val
+TimeoutError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\1\Desktop\Flow\src\ui\app.py", line 1146, in update_loop
+    await asyncio.gather(*tasks)
+  File "C:\Users\1\Desktop\Flow\src\core\bot_manager.py", line 118, in update_balances
+    self.bal_a, self.bal_b = await asyncio.gather(
+                             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\Desktop\Flow\src\exchanges\pacifica.py", line 189, in get_balance
+    resp = await self._request("GET", "/account", {"account": self.api_key}, sign_type="account")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\1\Desktop\Flow\src\exchanges\pacifica.py", line 176, in _request
+    raise Exception("Pacifica API Error: Timeout")
+Exception: Pacifica API Error: Timeout
+
+[16:25:42] UI Heartbeat: Application is running
+[16:26:43] UI Heartbeat: Application is running
+[16:27:44] UI Heartbeat: Application is running
+[16:28:44] UI Heartbeat: Application is running
+[16:29:45] UI Heartbeat: Application is running
+[16:30:45] UI Heartbeat: Application is running
+[16:31:46] UI Heartbeat: Application is running
+[16:32:46] UI Heartbeat: Application is running
+[16:33:47] UI Heartbeat: Application is running
+[16:34:58] UI Heartbeat: Application is running
+[16:35:59] UI Heartbeat: Application is running
+[16:36:59] UI Heartbeat: Application is running
+[16:38:00] UI Heartbeat: Application is running
+[16:39:00] UI Heartbeat: Application is running

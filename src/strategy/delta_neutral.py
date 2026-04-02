@@ -1,3 +1,4 @@
+import time
 import asyncio
 import logging
 from decimal import Decimal
@@ -24,6 +25,7 @@ class TradeContext:
         self.taker_side: Optional[str] = None
         self.target_size_usd = Decimal("0.0")
         self.target_tp_usd = Decimal("0.0")
+        self.maker_order_time: float = 0.0
 
 class DeltaNeutralStrategy:
     def __init__(self, exchange_a: ExchangeBase, exchange_b: ExchangeBase):
@@ -38,6 +40,9 @@ class DeltaNeutralStrategy:
         
         # Active trades mapped by symbol
         self.trades: Dict[str, TradeContext] = {}
+        
+        # Blacklist for symbols that failed to place orders (unsupported instruments, etc.)
+        self.blacklisted_symbols: set[str] = set()
         
         # Strategy Parameters
         self.min_spread_bps = Decimal("15.0")
@@ -152,8 +157,8 @@ class DeltaNeutralStrategy:
         best_edge = Decimal("-999999.0")
         best_data = None
 
-        # We only check symbols not currently trading
-        symbols_to_check = [s for s in self.available_symbols if s not in self.trades]
+        # We only check symbols not currently trading and not blacklisted
+        symbols_to_check = [s for s in self.available_symbols if s not in self.trades and s not in self.blacklisted_symbols]
         
         if not symbols_to_check:
             return
@@ -253,7 +258,9 @@ class DeltaNeutralStrategy:
             ctx.ex_b_side = 'buy'
             ctx.maker_ex = self.ex_a
             ctx.taker_ex = self.ex_b
-            maker_price = price_a * Decimal("0.9999") 
+            maker_price = price_a * Decimal("0.9999")
+            # Round maker price to tick size (0.0001) to match exchange requirements
+            maker_price = Decimal(str(round(float(maker_price), 4)))
             ctx.maker_side = ctx.ex_a_side
             ctx.taker_side = ctx.ex_b_side
         else:
@@ -262,6 +269,8 @@ class DeltaNeutralStrategy:
             ctx.maker_ex = self.ex_b
             ctx.taker_ex = self.ex_a
             maker_price = price_b * Decimal("1.0001")
+            # Round maker price to tick size (0.0001) to match exchange requirements
+            maker_price = Decimal(str(round(float(maker_price), 4)))
             ctx.maker_side = ctx.ex_b_side
             ctx.taker_side = ctx.ex_a_side
 
@@ -275,12 +284,21 @@ class DeltaNeutralStrategy:
             ctx.state = StrategyState.WAITING_MAKER
             ctx.target_size_usd = trade_size_usd
             ctx.target_tp_usd = take_profit
+            ctx.maker_order_time = time.time()
             self.trades[symbol] = ctx
             
             # Increment session volume (Maker side)
             self.current_session_volume += trade_size_usd
         except Exception as e:
+            error_msg = str(e)
             self._log(f"[{symbol}] Failed to open Maker: {e}", "red")
+            
+            # Blacklist symbol on any failure to prevent infinite loop hanging
+            self.blacklisted_symbols.add(symbol)
+            if "unsupported instrument" in error_msg.lower() or "not found" in error_msg.lower():
+                self._log(f"[{symbol}] Added to blacklist (unsupported)", "yellow")
+            else:
+                self._log(f"[{symbol}] Temporarily blacklisted due to maker failure.", "yellow")
 
     async def _handle_waiting_maker(self, ctx: TradeContext):
         try:
@@ -298,6 +316,12 @@ class DeltaNeutralStrategy:
                 
                 # Increment session volume (Taker side)
                 self.current_session_volume += getattr(ctx, 'target_size_usd', self.target_size_usd)
+            else:
+                # Check for timeout (e.g., 30 seconds)
+                if time.time() - getattr(ctx, 'maker_order_time', 0.0) > 30.0:
+                    self._log(f"[{ctx.symbol}] Maker order timed out. Blacklisting symbol temporarily.", "yellow")
+                    self.blacklisted_symbols.add(ctx.symbol)
+                    del self.trades[ctx.symbol]
         except Exception as e:
             self.logger.error(f"[{ctx.symbol}] Waiting Maker Error: {e}")
 

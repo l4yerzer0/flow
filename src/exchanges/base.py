@@ -32,6 +32,10 @@ class ExchangeBase(ABC):
         """Establish connection (auth/session)."""
         pass
 
+    async def disconnect(self):
+        """Close connections and resources. Optional to implement."""
+        pass
+
     @abstractmethod
     async def get_balance(self, asset: str = "USDC") -> Decimal:
         """Get available balance for trading."""

@@ -140,6 +140,11 @@ class VariationalExchange(ExchangeBase):
             self.connected = False
             raise e
 
+    async def disconnect(self):
+        if self.scraper:
+            self.scraper.close()
+        self.connected = False
+
     async def _request(self, method: str, endpoint: str, data: dict = None, is_public: bool = False) -> dict:
         url = f"{self.PUBLIC_API_URL if is_public else self.INTERNAL_API_URL}{endpoint}"
         
@@ -154,10 +159,12 @@ class VariationalExchange(ExchangeBase):
             return self.scraper.request(method, url, json=data, timeout=10)
 
         try:
-            resp = await asyncio.to_thread(do_req)
+            resp = await asyncio.wait_for(asyncio.to_thread(do_req), timeout=15.0)
+        except asyncio.TimeoutError:
+            raise Exception("Variational Network/Cloudflare Error: Request timed out (15s)")
         except Exception as e:
             raise Exception(f"Variational Network/Cloudflare Error: {e}")
-        
+
         # Handle expiration (401)
         if resp.status_code == 401 and not is_public:
             logger.warning("Variational token expired, re-authenticating...")
@@ -165,12 +172,13 @@ class VariationalExchange(ExchangeBase):
             success = await self.connect()
             if success:
                 try:
-                    resp = await asyncio.to_thread(do_req)
+                    resp = await asyncio.wait_for(asyncio.to_thread(do_req), timeout=15.0)
+                except asyncio.TimeoutError:
+                    raise Exception("Variational Network/Cloudflare Error after re-auth: Request timed out (15s)")
                 except Exception as e:
-                    raise Exception(f"Variational Network/Cloudflare Error after re-auth: {e}")
-            
+                    raise Exception(f"Variational Network/Cloudflare Error after re-auth: {e}")            
         if resp.status_code != 200:
-            raise Exception(f"Variational API Error: {resp.status_code} - {resp.text}")
+            raise Exception(f"Variational API Error: {resp.status_code} - {resp.text}\nURL: {url}\nPayload: {data}")
         return resp.json()
 
     async def get_balance(self, asset: str = "USDC") -> Decimal:
@@ -217,20 +225,10 @@ class VariationalExchange(ExchangeBase):
     async def _get_instrument_config(self, symbol: str) -> Dict[str, Any]:
         """Fetch instrument specific config like funding_interval_s."""
         clean_symbol = symbol.replace("-PERP", "").upper()
-        try:
-            data = await self._request("GET", "/metadata/stats", is_public=True)
-            for m in data.get("listings", []):
-                ticker = str(m.get("ticker", "")).upper()
-                if ticker == clean_symbol or ticker == f"{clean_symbol}-PERP":
-                    return {
-                        "underlying": ticker.replace("-PERP", ""),
-                        "instrument_type": "perpetual_future",
-                        "settlement_asset": "USDC",
-                        "funding_interval_s": int(m.get("funding_interval_s", 3600))
-                    }
-        except Exception:
-            pass
         
+        # Always use 3600 (1 hour) for funding_interval_s
+        # Even though metadata/stats may return different values (like 28800),
+        # the trading API only accepts 3600
         return {
             "underlying": clean_symbol,
             "instrument_type": "perpetual_future",
@@ -247,25 +245,41 @@ class VariationalExchange(ExchangeBase):
         order_type: str = 'market'
     ) -> Order:
         try:
+            # Get initial instrument config (will be updated from indicative response)
             instr_config = await self._get_instrument_config(symbol)
             
+            # Round amount to 4 decimal places to avoid precision errors
+            rounded_amount = round(float(amount), 4)
+            
             if order_type == 'limit' and price is not None:
+                # For limit orders, we need to get the correct instrument config from indicative first
+                quote_payload = {
+                    "instrument": instr_config,
+                    "qty": str(rounded_amount)
+                }
+                logger.info(f"Variational indicative quote (for limit): {quote_payload}")
+                quote_data = await self._request("POST", "/quotes/indicative", data=quote_payload)
+                
+                # Use the instrument config returned by indicative
+                correct_instrument = quote_data.get("instrument", instr_config)
+                
                 limit_payload = {
                     "order_type": "limit",
                     "limit_price": str(price),
                     "side": side.lower(),
-                    "instrument": instr_config,
-                    "qty": str(amount),
+                    "instrument": correct_instrument,
+                    "qty": str(rounded_amount),
                     "slippage_limit": "0.005",
                     "is_auto_resize": False,
                     "use_mark_price": False,
                     "is_reduce_only": False
                 }
+                logger.info(f"Variational limit order: {limit_payload}")
                 resp = await self._request("POST", "/orders/new/limit", data=limit_payload)
                 return Order(
                     symbol=symbol,
                     side=side,
-                    amount=amount,
+                    amount=Decimal(str(rounded_amount)),
                     price=price,
                     order_type="limit"
                 )
@@ -275,8 +289,9 @@ class VariationalExchange(ExchangeBase):
             # Request Quote
             quote_payload = {
                 "instrument": instr_config,
-                "qty": str(amount)
+                "qty": str(rounded_amount)
             }
+            logger.info(f"Variational indicative quote: {quote_payload}")
             quote_data = await self._request("POST", "/quotes/indicative", data=quote_payload)
             quote_id = quote_data.get("quote_id")
             
@@ -287,15 +302,16 @@ class VariationalExchange(ExchangeBase):
             order_payload = {
                 "quote_id": quote_id,
                 "side": side.lower(),
-                "max_slippage": 0.01,
+                "max_slippage": 0.005,
                 "is_reduce_only": False
             }
+            logger.info(f"Variational market order: {order_payload}")
             resp = await self._request("POST", "/orders/new/market", data=order_payload)
             
             return Order(
                 symbol=symbol,
                 side=side,
-                amount=amount,
+                amount=Decimal(str(rounded_amount)),
                 price=price or Decimal(str(quote_data.get("price", 0))),
                 order_type=order_type
             )
@@ -324,7 +340,7 @@ class VariationalExchange(ExchangeBase):
             accept_payload = {
                 "quote_id": quote_id,
                 "side": close_side,
-                "max_slippage": 0.01,
+                "max_slippage": 0.005,
                 "is_reduce_only": True
             }
             # Old connector used /quotes/accept for closing
