@@ -2,6 +2,7 @@
 [16:24:20] UI Heartbeat: Application is running
 [16:24:30] UI Update Error: Pacifica API Error: Timeout
 [16:24:30] Traceback (most recent call last):
+
   File "C:\Users\1\AppData\Local\Programs\Python\Python312\Lib\site-packages\aiohttp\client.py", line 779, in _request
     resp = await handler(req)
            ^^^^^^^^^^^^^^^^^^
